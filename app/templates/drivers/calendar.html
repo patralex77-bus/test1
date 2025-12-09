@@ -1,0 +1,221 @@
+{% extends "drivers/base_driver.html" %}
+{% set active_page = 'calendar' %}
+{% block title %}Календар на поръчките · {{ (current_driver.last_name ~ ' ' ~ current_driver.first_name)|trim }}{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+
+  <!-- Заглавие + превключвател СЕДМИЦА/МЕСЕЦ + навигация -->
+  <header class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h1 class="text-lg font-semibold">
+        Календар на поръчките – {{ (current_driver.last_name ~ ' ' ~ current_driver.first_name)|trim }}
+      </h1>
+      <p class="text-xs text-slate-500 mt-1">
+        Избери дали да виждаш текущата седмица (от Понеделник) или целия месец.
+      </p>
+    </div>
+
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+      <!-- Превключвател СЕДМИЦА / МЕСЕЦ -->
+      <div class="inline-flex items-center rounded-full border bg-slate-50 p-0.5 text-[11px]">
+        <a href="{{ url_for('driver_portal.calendar', date=selected_date_str, view='week') }}"
+           class="px-3 py-1 rounded-full {% if view_mode == 'week' %} bg-slate-900 text-white {% else %} text-slate-600 {% endif %}">
+          Седмица
+        </a>
+        <a href="{{ url_for('driver_portal.calendar', month=month_value, date=selected_date_str, view='month') }}"
+           class="px-3 py-1 rounded-full {% if view_mode == 'month' %} bg-slate-900 text-white {% else %} text-slate-600 {% endif %}">
+          Месец
+        </a>
+      </div>
+
+      {% if view_mode == 'week' %}
+        <!-- Навигация по СЕДМИЦИ -->
+        <div class="flex items-center gap-2 text-xs">
+          <a href="{{ url_for('driver_portal.calendar', date=prev_week_date_str, view='week') }}"
+             class="px-2 py-1 rounded-lg border text-slate-600 hover:bg-slate-50">
+            ‹ Предишна седмица
+          </a>
+
+          <div class="px-2 py-1 bg-slate-50 rounded-lg border text-slate-700 text-[11px]">
+            Седмица на {{ selected_date.strftime('%d.%m.%Y') }}
+          </div>
+
+          <a href="{{ url_for('driver_portal.calendar', date=next_week_date_str, view='week') }}"
+             class="px-2 py-1 rounded-lg border text-slate-600 hover:bg-slate-50">
+            Следваща седмица ›
+          </a>
+        </div>
+      {% else %}
+        <!-- Навигация по МЕСЕЦИ -->
+        <form method="get"
+              action="{{ url_for('driver_portal.calendar') }}"
+              class="flex items-center gap-2 text-xs">
+          <input type="hidden" name="view" value="month">
+          <input type="hidden" name="date" value="{{ selected_date_str }}">
+
+          <a href="{{ url_for('driver_portal.calendar', month=prev_month_value, view='month') }}"
+             class="px-2 py-1 rounded-lg border text-slate-600 hover:bg-slate-50">
+            ‹ Предишен месец
+          </a>
+
+          <div class="px-2 py-1 bg-slate-50 rounded-lg border text-slate-700 flex items-center gap-2">
+            <input type="month"
+                   name="month"
+                   value="{{ month_value }}"
+                   class="border-none bg-transparent text-xs focus:outline-none focus:ring-0">
+            <button type="submit" class="text-[11px] uppercase tracking-wide text-slate-500">
+              Смени
+            </button>
+          </div>
+
+          <a href="{{ url_for('driver_portal.calendar', month=next_month_value, view='month') }}"
+             class="px-2 py-1 rounded-lg border text-slate-600 hover:bg-slate-50">
+            Следващ месец ›
+          </a>
+        </form>
+      {% endif %}
+    </div>
+  </header>
+
+  <!-- Лента с дни -->
+  <section class="bg-white rounded-2xl p-3 shadow-sm">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="text-sm font-semibold">
+        {% if view_mode == 'week' %}
+          Седмица на {{ selected_date.strftime('%d.%m.%Y') }} (от Понеделник)
+        {% else %}
+          Дни в {{ month_label|lower }}
+        {% endif %}
+      </h2>
+      <span class="text-[11px] text-slate-400">
+        Точка = има курсове
+      </span>
+    </div>
+
+    <div class="flex gap-1 overflow-x-auto pb-1 pt-1">
+      {% for d in days %}
+        {% set is_selected = (d.date_str == selected_date_str) %}
+        {% set is_today = (d.date == today) %}
+        {% set has_orders = (d.orders|length > 0) %}
+        <a href="{{ url_for('driver_portal.calendar',
+                            month=month_value,
+                            date=d.date_str,
+                            view=view_mode) }}"
+           class="flex flex-col items-center justify-center min-w-[44px] px-1.5 py-1 rounded-xl text-[11px]
+                  {% if is_selected %} bg-slate-900 text-white {% else %} border border-slate-200 bg-white text-slate-700 {% endif %}">
+          <div class="font-semibold leading-none">
+            {{ d.day_num }}
+          </div>
+          <div class="text-[9px] leading-none mt-0.5
+                      {% if is_selected %} text-slate-200 {% else %} text-slate-400 {% endif %}">
+            {% set w = d.weekday %}
+            {% if w == 0 %}Пн{% elif w == 1 %}Вт{% elif w == 2 %}Ср{% elif w == 3 %}Чт{% elif w == 4 %}Пт{% elif w == 5 %}Сб{% else %}Нд{% endif %}
+          </div>
+          <div class="mt-1 h-1.5 flex items-center justify-center">
+            {% if has_orders %}
+              <span class="inline-block w-1.5 h-1.5 rounded-full
+                           {% if is_selected %} bg-emerald-300 {% else %} bg-emerald-500 {% endif %}"></span>
+            {% endif %}
+          </div>
+          {% if is_today %}
+            <div class="mt-0.5 text-[8px]
+                        {% if is_selected %} text-amber-200 {% else %} text-amber-500 {% endif %}">
+              днес
+            </div>
+          {% endif %}
+        </a>
+      {% endfor %}
+    </div>
+  </section>
+
+  <!-- Списък с поръчки за избрания ден -->
+<section class="bg-white rounded-2xl p-3 shadow-sm"> 
+  <div class="flex items-center justify-between mb-2">
+    <div>
+      <h2 class="text-sm font-semibold">
+        Поръчки за {{ selected_date.strftime('%d.%m.%Y') }}
+      </h2>
+      <p class="text-[11px] text-slate-400">
+        Часове, маршрут и статус на отчета.
+      </p>
+    </div>
+  </div>
+
+  {% if selected_orders|length == 0 %}
+    <div class="text-xs text-slate-500 py-2">
+      Няма курсове за този ден.
+    </div>
+  {% else %}
+    <div class="space-y-2">
+      {% for o in selected_orders %}
+        <div class="rounded-xl border border-slate-100 px-3 py-2 text-xs flex flex-col gap-1">
+
+          {# Ред 1: часове + заглавие + статуси #}
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center justify-center rounded-full bg-slate-900 text-white px-2 py-0.5 text-[11px]">
+                {% if o.time_range %}
+                  {{ o.time_range }}
+                {% elif o.start_time or o.end_time %}
+                  {{ o.start_time or '—' }}{% if o.end_time %} – {{ o.end_time }}{% endif %}
+                {% else %}
+                  без час
+                {% endif %}
+              </span>
+
+              <span class="text-[13px] font-semibold text-slate-800">
+                {{ o.title }}
+              </span>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-end gap-1 text-[11px]">
+              {% if not o.has_log %}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                  Липсва отчет
+                </span>
+              {% else %}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  Отчет попълнен
+                </span>
+              {% endif %}
+
+              {% if o.has_docs %}
+                <span class="inline-flex items-center gap-1 px-1 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
+                  Документи
+                </span>
+              {% endif %}
+            </div>
+          </div>
+
+          {# Ред 2: автобус + маршрут #}
+          <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+            {% if o.bus_plate %}
+              <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                🚌 {{ o.bus_plate }}
+              </span>
+            {% endif %}
+
+            {% if o.origin or o.destination %}
+              <span>
+                {{ o.origin or '—' }} → {{ o.destination or '—' }}
+              </span>
+            {% endif %}
+          </div>
+
+          {# Ред 3: бутон – винаги вдясно #}
+          <div class="mt-2 flex justify-end">
+            <a href="{{ url_for('driver_portal.order_detail', order_id=o.id) }}"
+               class="inline-flex items-center px-3 py-1.5 rounded-lg border text-[11px] hover:bg-slate-50">
+              Подробности
+            </a>
+          </div>
+
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+</div>
+{% endblock %}

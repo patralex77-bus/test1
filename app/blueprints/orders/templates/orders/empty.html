@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Поръчки · Начало{% endblock %}
+{% block content %}
+<div class="p-6 bg-white rounded-2xl shadow">
+  <h1 class="text-xl font-semibold mb-2">Поръчки</h1>
+  <p class="text-slate-600 mb-4">Тук ще се показват списъци/детайли и т.н.</p>
+  <a href="{{ url_for('orders.entry') }}" class="inline-block bg-slate-900 text-white px-4 py-2 rounded-xl">
+    Нова поръчка
+  </a>
+</div>
+{% endblock %}

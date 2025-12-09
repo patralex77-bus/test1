@@ -1,0 +1,290 @@
+
+{% extends "base.html" %}
+{% block title %}Разходи за автобус {{ bus.reg_no or bus.id }} · Панел{% endblock %}
+{% block content %}
+<h1 class="h5 mb-3">Разходи — Автобус <span class="text-muted">{{ bus.reg_no or ("#"~bus.id) }}</span></h1>
+<div class="mb-3 d-flex gap-2 align-items-center">
+  <a href="{{ url_for('buses.index') }}" class="btn btn-link"><i class="bi bi-arrow-left"></i> Назад</a>
+  <a href="{{ url_for('buses.export_bus_expenses_xlsx', bus_id=bus.id) }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark-excel me-1"></i> Export XLSX</a>
+  <a href="{{ url_for('buses.bus_report', bus_id=bus.id) }}" class="btn btn-outline-primary btn-sm"><i class="bi bi-graph-up me-1"></i> Отчет</a>
+</div>
+
+<div class="row g-4">
+  <!-- Фиксирани разходи -->
+  <div class="col-lg-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header bg-light d-flex justify-content-between align-items-center">
+        <span class="fw-semibold">Фиксирани разходи</span>
+      </div>
+      <div class="card-body">
+        <form class="row g-2 align-items-end" method="post" action="{{ url_for('buses.fixed_add', bus_id=bus.id) }}" novalidate>
+          <div class="col-md-3">
+            <label class="form-label">Категория</label>
+            <select name="category" class="form-select">
+              <option value="CREDIT">Кредит</option>
+              <option value="INSURANCE">Застраховка</option>
+              <option value="OTHER" selected>Друго</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Периодичност</label>
+            <select name="periodicity" class="form-select">
+              <option value="MONTHLY" selected>Месечна</option>
+              <option value="YEARLY">Годишна</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Заглавие</label>
+            <input name="title" class="form-control" placeholder="Каско Allianz" required>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Сума <span class="text-danger">*</span></label>
+            <input name="amount" type="number" step="0.01" min="0" class="form-control" placeholder="0.00" required>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Начало</label>
+            <input name="start_date" type="date" class="form-control">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Край</label>
+            <input name="end_date" type="date" class="form-control">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Бележки</label>
+            <input name="notes" class="form-control" placeholder="падеж, полица, др.">
+          </div>
+          <div class="col-12 mt-2">
+            <button class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i> Добави</button>
+          </div>
+        </form>
+
+        <div class="table-responsive mt-3">
+          <table class="table table-sm table-striped align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>#</th><th>Категория</th><th>Периодичност</th><th>Заглавие</th><th>Сума</th><th>Начало</th><th>Край</th><th>Бележки</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for x in fixed %}
+              <tr>
+                <td class="text-muted">{{ x.id }}</td>
+                <td>{% if x.category=='CREDIT' %}Кредит{% elif x.category=='INSURANCE' %}Застраховка{% else %}Друго{% endif %}</td>
+                <td>{% if x.periodicity=='MONTHLY' %}Месечна{% else %}Годишна{% endif %}</td>
+                <td>{{ x.title }}</td>
+                <td>{{ '%.2f'|format(x.amount) }}</td>
+                <td>{{ x.start_date or '' }}</td>
+                <td>{{ x.end_date or '' }}</td>
+                <td class="text-muted">{{ x.notes or '' }}</td>
+                <td class="text-end">
+                  <form method="post" action="{{ url_for('buses.fixed_delete', bus_id=bus.id, item_id=x.id) }}" onsubmit="return confirm('Изтриване на записа?')">
+                    <button class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+                  </form>
+                </td>
+              </tr>
+              {% else %}
+              <tr><td colspan="9" class="text-center text-muted py-3">Няма фиксирани разходи.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ремонти / обслужване -->
+  <div class="col-lg-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header bg-light">
+        <span class="fw-semibold">Текущи ремонти / обслужване</span>
+      </div>
+      <div class="card-body">
+        <form class="row g-2 align-items-end" method="post" action="{{ url_for('buses.repairs_add', bus_id=bus.id) }}" novalidate>
+          <div class="col-md-3">
+            <label class="form-label">Дата <span class="text-danger">*</span></label>
+            <input name="date" type="date" class="form-control" required>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Сума <span class="text-danger">*</span></label>
+            <input name="amount" type="number" step="0.01" min="0" class="form-control" placeholder="0.00" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Описание</label>
+            <input name="description" class="form-control" placeholder="масла, филтри, накладки...">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Сервиз / Доставчик</label>
+            <input name="vendor" class="form-control" placeholder="пример: AutoService Ltd.">
+          </div>
+          <div class="col-12 mt-2">
+            <button class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i> Добави</button>
+          </div>
+        </form>
+
+        <div class="table-responsive mt-3">
+          <table class="table table-sm table-striped align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>#</th><th>Дата</th><th>Сума</th><th>Описание</th><th>Сервиз/Доставчик</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in repairs %}
+              <tr>
+                <td class="text-muted">{{ r.id }}</td>
+                <td>{{ r.date }}</td>
+                <td>{{ '%.2f'|format(r.amount) }}</td>
+                <td>{{ r.description }}</td>
+                <td class="text-muted">{{ r.vendor or '' }}</td>
+                <td class="text-end">
+                  <form method="post" action="{{ url_for('buses.repairs_delete', bus_id=bus.id, item_id=r.id) }}" onsubmit="return confirm('Изтриване на записа?')">
+                    <button class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+                  </form>
+                </td>
+              </tr>
+              {% else %}
+              <tr><td colspan="6" class="text-center text-muted py-3">Няма въведени ремонти.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Пробег -->
+  <div class="col-12">
+    <div class="card shadow-sm h-100 mt-4">
+      <div class="card-header bg-light">
+        <span class="fw-semibold">Пробег (километри) — ръчен вход</span>
+      </div>
+      <div class="card-body">
+        <form class="row g-2 align-items-end" method="post" action="{{ url_for('buses.mileage_add', bus_id=bus.id) }}" novalidate>
+          <div class="col-md-2">
+            <label class="form-label">Дата <span class="text-danger">*</span></label>
+            <input name="date" type="date" class="form-control" required>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Километри <span class="text-danger">*</span></label>
+            <input name="km" type="number" min="0" step="1" class="form-control" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Бележки</label>
+            <input name="notes" class="form-control" placeholder="курс, маршрут, др.">
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-primary w-100 mt-2"><i class="bi bi-plus-lg me-1"></i> Добави</button>
+          </div>
+        </form>
+
+        <div class="table-responsive mt-3">
+          <table class="table table-sm table-striped align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>#</th><th>Дата</th><th>Км</th><th>Бележки</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for m in mileages %}
+              <tr>
+                <td class="text-muted">{{ m.id }}</td>
+                <td>{{ m.date }}</td>
+                <td>{{ m.km }}</td>
+                <td>{{ m.notes or '' }}</td>
+                <td class="text-end">
+                  <form method="post" action="{{ url_for('buses.mileage_delete', bus_id=bus.id, item_id=m.id) }}" onsubmit="return confirm('Изтриване на записа?')">
+                    <button class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+                  </form>
+                </td>
+              </tr>
+              {% else %}
+              <tr><td colspan="5" class="text-center text-muted py-3">Няма въведени данни за пробег.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Гориво -->
+  <div class="col-12">
+    <div class="card shadow-sm h-100 mt-4">
+      <div class="card-header bg-light">
+        <span class="fw-semibold">Гориво (зареждания)</span>
+      </div>
+      <div class="card-body">
+        <form class="row g-2 align-items-end" method="post" action="{{ url_for('buses.fuel_add', bus_id=bus.id) }}" novalidate>
+          <div class="col-md-2">
+            <label class="form-label">Дата <span class="text-danger">*</span></label>
+            <input name="date" type="date" class="form-control" required>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Литри <span class="text-danger">*</span></label>
+            <input name="liters" type="number" min="0" step="0.001" class="form-control" required>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Цена/литър <span class="text-danger">*</span></label>
+            <input name="price_per_liter" type="number" min="0" step="0.001" class="form-control" required>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Сума</label>
+            <input name="amount" type="number" min="0" step="0.01" class="form-control" placeholder="авто">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Одометър</label>
+            <input name="odometer" type="number" min="0" step="1" class="form-control">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Станция</label>
+            <input name="station" class="form-control" placeholder="OMV, Shell ...">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Плащане</label>
+            <input name="payment_method" class="form-control" placeholder="Карта/Ваучер/Кеш">
+          </div>
+          <div class="col-md-5">
+            <label class="form-label">Бележки</label>
+            <input name="notes" class="form-control">
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-primary w-100 mt-2"><i class="bi bi-plus-lg me-1"></i> Добави</button>
+          </div>
+        </form>
+
+        <div class="table-responsive mt-3">
+          <table class="table table-sm table-striped align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>#</th><th>Дата</th><th>Литри</th><th>Цена/л</th><th>Сума</th><th>Одометър</th><th>Станция</th><th>Плащане</th><th>Бележки</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for f in fuels %}
+              <tr>
+                <td class="text-muted">{{ f.id }}</td>
+                <td>{{ f.date }}</td>
+                <td>{{ '%.3f'|format(f.liters) }}</td>
+                <td>{{ '%.3f'|format(f.price_per_liter) }}</td>
+                <td>{{ '%.2f'|format(f.amount) }}</td>
+                <td>{{ f.odometer or '' }}</td>
+                <td>{{ f.station or '' }}</td>
+                <td>{{ f.payment_method or '' }}</td>
+                <td>{{ f.notes or '' }}</td>
+                <td class="text-end">
+                  <form method="post" action="{{ url_for('buses.fuel_delete', bus_id=bus.id, item_id=f.id) }}" onsubmit="return confirm('Изтриване на записа?')">
+                    <button class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+                  </form>
+                </td>
+              </tr>
+              {% else %}
+              <tr><td colspan="10" class="text-center text-muted py-3">Няма въведени зареждания.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

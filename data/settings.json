@@ -1,0 +1,46 @@
+{
+  "countries": [
+    {
+      "name": "Austria",
+      "fee_per_km": 0.3,
+      "fee_per_day": 0.0,
+      "fuel_price": 1.47,
+      "vat_percent": 10.0
+    },
+    {
+      "name": "Deutschland",
+      "fee_per_km": 0.0,
+      "fee_per_day": 0.0,
+      "fuel_price": 1.65,
+      "vat_percent": 19.0
+    },
+    {
+      "name": "Tschechien",
+      "fee_per_km": 0.07,
+      "fee_per_day": 0.0,
+      "fuel_price": 1.35,
+      "vat_percent": 25.0
+    },
+    {
+      "name": "Frankreich",
+      "fee_per_km": 0.2,
+      "fee_per_day": 0.0,
+      "fuel_price": 1.65,
+      "vat_percent": 0.0
+    },
+    {
+      "name": "Italien",
+      "fee_per_km": 0.15,
+      "fee_per_day": 0.0,
+      "fuel_price": 1.75,
+      "vat_percent": 0.0
+    },
+    {
+      "name": "Slovenien",
+      "fee_per_km": 0.3,
+      "fee_per_day": 0.0,
+      "fuel_price": 1.45,
+      "vat_percent": 9.0
+    }
+  ]
+}

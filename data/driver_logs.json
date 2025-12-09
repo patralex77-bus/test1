@@ -1,0 +1,46 @@
+{
+  "logs": [
+    {
+      "order_id": 49,
+      "driver_id": 1,
+      "date": "2025-11-28",
+      "odo_start": "974100",
+      "odo_end": "974290",
+      "fuel_liters": 0.0,
+      "fuel_amount": 0.0,
+      "tolls": 0.0,
+      "parking": 0.0,
+      "ferry": 0.0,
+      "other_expenses": 0.0,
+      "work_start": "07:15",
+      "work_end": "21:00",
+      "worked_hours": 13.75,
+      "incidents": "",
+      "notes": "",
+      "updated_at": "2025-11-28T22:51:47Z"
+    },
+    {
+      "driver_id": 1,
+      "order_id": 41,
+      "date": "2025-12-02",
+      "bus_start": "W4158LO",
+      "work_start": "07:00",
+      "odo_start": "795255",
+      "bus_condition": "",
+      "notes_start": "",
+      "other_expenses": [
+        {
+          "amount": "20",
+          "desc": "Putzmittel"
+        }
+      ],
+      "updated_at": "2025-12-02 19:21:08",
+      "bus_end": "W4158LO",
+      "work_end": "19:00",
+      "odo_end": "795459",
+      "diesel_amount": "200",
+      "diesel_liters": "120",
+      "notes_end": ""
+    }
+  ]
+}

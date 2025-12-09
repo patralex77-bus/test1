@@ -1,0 +1,863 @@
+{% extends "base.html" %}
+{% block title %}Шофьор · {{ driver.last_name }} {{ driver.first_name }}{% endblock %}
+{% block content %}
+
+<h1 class="text-xl font-semibold mb-4 flex items-center justify-between">
+  <span>Шофьор: {{ driver.last_name }} {{ driver.first_name }}</span>
+  <div class="flex gap-2">
+    <a class="inline-flex h-9 w-9 items-center justify-center rounded-lg border hover:bg-slate-50" href="{{ url_for('drivers.list') }}" title="Назад">
+      <!-- back -->
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7 7-7M3 12h18"/>
+      </svg>
+    </a>
+    <a class="inline-flex h-9 w-9 items-center justify-center rounded-lg border hover:bg-slate-50" href="{{ url_for('drivers.edit', driver_id=driver.id) }}" title="Редакция">
+       <!-- pencil -->
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487a2.25 2.25 0 113.182 3.182L7.5 20.213 3 21l.787-4.5L16.862 4.487z"/>
+      </svg>
+    </a>
+    <form method="post" action="{{ url_for('drivers.delete', driver_id=driver.id) }}"
+          onsubmit="return confirm('Да изтрием ли този шофьор?');">
+      <button class="inline-flex h-9 w-9 items-center justify-center rounded-lg border hover:bg-red-50" title="Изтрий">
+        <!-- trash -->
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-red-600" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2m1 0l-.867 12.142A2 2 0 0113.138 21H10.86a2 2 0 01-1.995-1.858L8 7h8"/>
+        </svg>
+      </button>
+    </form>
+  </div>
+</h1>
+
+<div class="grid md:grid-cols-2 gap-4">
+  <div class="bg-white rounded-2xl shadow p-4">
+    <div class="text-sm text-slate-600 mb-2">Валидности</div>
+    <ul class="text-sm leading-7">
+      <li>СУМПС: <strong>{{ (driver.docs and driver.docs.license_valid_until) or '—' }}</strong></li>
+      <li>Карта: <strong>{{ (driver.docs and driver.docs.card_valid_until) or '—' }}</strong></li>
+      <li>Паспорт: <strong>{{ (driver.docs and driver.docs.passport_valid_until) or '—' }}</strong></li>
+      <li>Медицински: <strong>{{ (driver.docs and driver.docs.med_check_valid_until) or '—' }}</strong></li>
+    </ul>
+  </div>
+
+  <div class="bg-white rounded-2xl shadow p-4">
+    <div class="text-sm text-slate-600 mb-2">Бележки</div>
+    <div class="text-sm">{{ driver.notes or '—' }}</div>
+  </div>
+</div>
+
+<!-- Назначения — само информативно -->
+<div class="bg-white rounded-2xl shadow p-4 mt-4">
+  <div class="flex items-center justify-between mb-3">
+    <div class="font-semibold">Назначени поръчки</div>
+    <div class="text-xs text-slate-500">
+      * Назначенията се правят от меню „Поръчки“. Тук е само преглед.
+    </div>
+  </div>
+
+  <div class="overflow-auto">
+    <table class="min-w-[700px] w-full text-sm">
+      <thead>
+        <tr class="text-left text-slate-600 border-b">
+          <th class="py-2 pr-3">Поръчка</th>
+          <th class="py-2 px-3">Период</th>
+          <th class="py-2 px-3">Автобус</th>
+          <th class="py-2 px-3 text-right">Портал</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in assigned_orders|default([]) %}
+        <tr class="border-b last:border-0">
+          <td class="py-2 pr-3 font-medium">
+            {{ o.title or ('Поръчка #' ~ o.id) }}
+          </td>
+          <td class="py-2 px-3">{{ o.start_date }} → {{ o.end_date or o.start_date }}</td>
+          <td class="py-2 px-3">{{ o.bus_plate or '—' }}</td>
+          <td class="py-2 px-3">
+            <div class="flex justify-end gap-2">
+              <!-- Генериране на портал линк -->
+              <form method="post" action="{{ url_for('drivers.new_token', driver_id=driver.id) }}">
+                <input type="hidden" name="order_id" value="{{ o.id }}">
+                <button class="inline-flex h-9 w-9 items-center justify-center rounded-lg border hover:bg-slate-50" title="Генерирай линк за портала">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a4.5 4.5 0 11-3.69 7.11l-5.56 5.56H3v-3.5l-5.56-5.56a4.5 4.5 0 017.19-3.61z"/>
+                  </svg>
+                </button>
+              </form>
+
+              <!-- Свали от шофьора -->
+              <form method="post"
+                    action="{{ url_for('drivers.unassign_order', driver_id=driver.id, order_id=o.id) }}"
+                    onsubmit="return confirm('Да свалим ли поръчка #{{ o.id }} от този шофьор?');">
+                <button class="inline-flex h-9 w-9 items-center justify-center rounded-lg border hover:bg-red-50" title="Свали от шофьора">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-red-600" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-7 7-4-4M5 19h14a2 2 0 002-2V7" />
+                  </svg>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="py-6 text-center text-slate-500">Няма назначения.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== Активни токени за портал ===== -->
+<div class="bg-white rounded-2xl shadow p-4 mt-6">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-lg font-semibold">Активни токени</h2>
+    <form method="post" action="{{ url_for('drivers.new_token', driver_id=driver.id) }}" class="flex items-center gap-2">
+      <label class="text-sm text-slate-600">Поръчка:</label>
+      <select name="order_id" class="border rounded-lg px-2 py-1 text-sm">
+        {% for o in assigned_orders|default([]) %}
+          <option value="{{ o.id }}">#{{ o.id }} — {{ o.title or ('Поръчка #' ~ o.id) }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm">Нов токен</button>
+    </form>
+  </div>
+
+  {% if tokens %}
+  <div class="overflow-auto">
+    <table class="min-w-[800px] w-full text-sm">
+      <thead>
+        <tr class="text-left text-slate-600 border-b">
+          <th class="py-2 pr-3">Поръчка</th>
+          <th class="py-2 px-3">Токен</th>
+          <th class="py-2 px-3">Създаден</th>
+          <th class="py-2 px-3">Статус</th>
+          <th class="py-2 px-3">Действия</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tokens %}
+        <tr class="border-b last:border-0">
+          <td class="py-2 pr-3 whitespace-nowrap">
+            {% set o = None %}
+            {% for oo in assigned_orders|default([]) %}
+              {% if oo.id == t.order_id %}{% set o = oo %}{% endif %}
+            {% endfor %}
+            #{{ t.order_id }} — {{ (o.title if o else '') or ('Поръчка #' ~ t.order_id) }}
+          </td>
+          <td class="py-2 px-3">
+            <div class="flex items-center gap-2">
+              <code class="px-2 py-0.5 rounded bg-slate-100">{{ t.token[:10] }}…</code>
+              <button type="button" class="text-xs underline js-copy"
+                      data-url="{{ url_for('drivers.portal', token=t.token, _external=True) }}">Копирай линк</button>
+            </div>
+          </td>
+          <td class="py-2 px-3 whitespace-nowrap">{{ t.created_at }}</td>
+          <td class="py-2 px-3">
+            {% if t.sent %}
+              <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200" title="Отбелязан като изпратен">
+                ✓ Изпратен
+              </span>
+            {% else %}
+              <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200" title="Все още не е изпратен">
+                • Неизпратен
+              </span>
+            {% endif %}
+          </td>
+          <td class="py-2 px-3">
+            <div class="flex items-center gap-2">
+              <form method="post" action="{{ url_for('drivers.toggle_token_sent', driver_id=driver.id, token=t.token) }}">
+                <button class="h-9 px-3 rounded-lg border hover:bg-slate-50 text-xs" type="submit">
+                  {% if t.sent %}Отмени „изпратен“{% else %}Отбележи като изпратен{% endif %}
+                </button>
+              </form>
+              <form method="post" action="{{ url_for('drivers.delete_token', driver_id=driver.id, token=t.token) }}"
+                    onsubmit="return confirm('Сигурни ли сте, че искате да изтриете този токен?');">
+                <button class="h-9 px-3 rounded-lg border hover:bg-red-50 text-xs text-red-700" type="submit">Изтрий</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="text-slate-500">Няма активни токени.</div>
+  {% endif %}
+</div>
+
+<script>
+document.addEventListener('click', (e)=>{
+  const btn = e.target.closest('.js-copy');
+  if(!btn) return;
+  const url = btn.getAttribute('data-url');
+  navigator.clipboard.writeText(url).then(()=>{
+    btn.textContent = 'Копирано!';
+    setTimeout(()=>btn.textContent='Копирай линк', 1200);
+  }).catch(()=>{ alert('Неуспех при копиране.'); });
+});
+</script>
+
+<!-- ===== Календар и дневни детайли ===== -->
+<div class="grid lg:grid-cols-2 gap-4 mt-4">
+  <!-- Календар -->
+  <div class="bg-white rounded-2xl shadow p-4">
+    <div class="cal-header flex items-center justify-between mb-3">
+      <button id="cal-prev" class="cal-nav" type="button">&larr;</button>
+      <div id="cal-title" class="cal-title"></div>
+      <button id="cal-next" class="cal-nav" type="button">&rarr;</button>
+    </div>
+
+    <div class="cal">
+      <div class="cal-weekdays">
+        <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Нд</span>
+      </div>
+      <div id="cal-grid" class="cal-grid"></div>
+    </div>
+
+    <div class="flex flex-wrap gap-4 mt-3 text-xs text-slate-600">
+      <div class="flex items-center gap-1">
+        <span class="dot has-log"></span> въведени данни
+      </div>
+      <div class="flex items-center gap-1">
+        <span class="underline-sample"></span> има назначение
+      </div>
+      <div class="flex items-center gap-1">
+        <span class="chip-range"></span> избран диапазон
+      </div>
+    </div>
+  </div>
+
+<a class="px-3 py-2 rounded-lg border hover:bg-slate-50"
+   href="{{ url_for('drivers.cleanup', driver_id=driver.id) }}">
+  🧹 Изтрий неактуални данни
+</a>
+
+  <!-- Детайли за избрания ден / диапазон -->
+  <div class="bg-white rounded-2xl shadow p-4">
+    <div class="font-semibold mb-2">Избор: <span id="day-picked">—</span></div>
+    <table class="w-full text-sm">
+      <tbody id="day-info">
+        <tr><td class="py-1 pr-2 text-slate-600">Поръчка</td><td id="di-order">—</td></tr>
+        <tr><td class="py-1 пр-2 text-slate-600">Одометър</td><td id="di-odo">—</td></tr>
+        <tr><td class="py-1 pr-2 text-slate-600">Гориво</td><td id="di-fuel">—</td></tr>
+        <tr><td class="py-1 пр-2 text-slate-600">Такси/др.</td><td id="di-exp">—</td></tr>
+        <tr><td class="py-1 pr-2 text-slate-600">Работно време</td><td id="di-hours">—</td></tr>
+        <tr><td class="py-1 pr-2 text-slate-600">Инциденти</td><td id="di-inc">—</td></tr>
+        <tr><td class="py-1 pr-2 text-slate-600">Бележки</td><td id="di-notes">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Статистики (часове + норми) -->
+<div class="grid lg:grid-cols-2 gap-4 mt-4">
+  <!-- Текущо (въведени данни) -->
+  <div class="bg-white rounded-2xl shadow p-4">
+    <div class="font-semibold mb-2">Текущо (въведени данни)</div>
+    <table class="w-full text-sm">
+      <tbody>
+        <tr><td class="py-1 pr-2 text-slate-600">Днес</td><td id="cur-day-h">0.00 ч</td></tr>
+        <tr><td class="py-1 pr-2 text-slate-600">Тази седмица</td><td id="cur-week-h">0.00 ч</td></tr>
+        <tr><td class="py-1 pr-2 text-slate-600">Този месец</td><td id="cur-month-h">0.00 ч</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Съответствие с нормите -->
+<div class="bg-white rounded-2xl shadow p-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="font-semibold">Съответствие с нормите</div>
+    <!-- Маркер за днешния ден -->
+    <div class="flex items-center gap-2 text-sm text-slate-600">
+      <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="12" cy="12" r="6" />
+        </svg>
+        Днес: <strong>{{ compliance.ref_date }}</strong>
+      </span>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+
+    <div class="p-3 rounded-xl border">
+      <div class="text-sm text-slate-500">Дневен лимит (≤ 13 ч)</div>
+      <div class="mt-1 font-medium">
+        {% if compliance.day_ok %}
+          <span class="text-green-700">ОК</span>
+        {% else %}
+          <span class="text-red-700">Над лимита</span>
+        {% endif %}
+      </div>
+      <div class="text-sm text-slate-600">
+        Ден {{ compliance.ref_date }}: {{ '%.2f'|format(compliance.day_hours) }} ч
+      </div>
+    </div>
+
+    <div class="p-3 rounded-xl border">
+      <div class="text-sm text-slate-500">Дневна почивка (≥ 11 ч)</div>
+      <div class="mt-1 font-medium">
+        {% if compliance.daily_rest_ok %}
+          <span class="text-green-700">ОК</span>
+        {% else %}
+          <span class="text-red-700">Недостатъчна</span>
+        {% endif %}
+      </div>
+      <div class="text-sm text-slate-600">
+        Почивка: {{ '%.1f'|format(compliance.daily_rest_hours) }} ч
+      </div>
+    </div>
+
+    <div class="p-3 rounded-xl border">
+      <div class="text-sm text-slate-500">Двуседмичен лимит (≤ 90 ч)</div>
+      <div class="mt-1 font-medium">
+        {% if compliance.fortnight_ok %}
+          <span class="text-green-700">ОК</span>
+        {% else %}
+          <span class="text-red-700">Над лимита</span>
+        {% endif %}
+      </div>
+      <div class="text-sm text-slate-600">
+        Последни 14 дни до {{ compliance.ref_date }}:
+        {{ '%.2f'|format(compliance.fortnight_hours) }} ч
+      </div>
+    </div>
+
+    <div class="p-3 rounded-xl border">
+      <div class="text-sm text-slate-500">Седмична непрекъсната почивка (≥45 ч)</div>
+      <div class="mt-1 font-medium">
+        {% if compliance.weekly_rest_ok %}
+          <span class="text-green-700">ОК</span>
+        {% else %}
+          <span class="text-amber-700">Липсва</span>
+        {% endif %}
+      </div>
+      <div class="text-sm text-slate-600">
+        {{ compliance.weekly_rest_note }}
+      </div>
+    </div>
+
+  </div>
+
+  <div class="text-xs text-slate-500 mt-2">
+    * Ползваме <em>worked_hours</em> като приближение на „работно време“. Ако по-късно добавите отделно поле за „часове шофиране“, ще можем да проверяваме и 9/10 ч лимити.
+  </div>
+</div>
+
+<!-- НОВО: Плащане — отделен контейнер -->
+   <div class="bg-white rounded-2xl shadow p-4 mt-4 lg:col-span-2">
+  <div class="font-medium mb-2">Заплащане — сравнение на схеми</div>
+
+  <div class="flex items-center gap-3 mb-2 text-xs text-slate-600">
+    <label class="inline-flex items-center gap-1">
+      <input id="proj-like-avg" type="checkbox" class="accent-slate-800" checked>
+      Проекция: остатъкът със средните стойности досега
+    </label>
+  </div>
+
+  <div class="overflow-x-auto">
+    <table class="min-w-[1000px] w-full text-sm" id="pay-comparison">
+      <thead>
+        <tr class="text-left text-slate-600 border-b">
+          <th class="py-1.5 pr-3">Схема</th>
+          <th class="py-1.5 px-3">Днес</th>
+          <th class="py-1.5 px-3">Седмица (до днес)</th>
+          <th class="py-1.5 px-3">Седмица (проекция)</th>
+          <th class="py-1.5 px-3">Месец (до днес)</th>
+          <th class="py-1.5 px-3">Месец (проекция)</th>
+          <th class="py-1.5 px-3">€ / час*</th>
+          <th class="py-1.5 px-3">Break-even ч/ден</th>
+        </tr>
+      </thead>
+      <tbody id="pay-rows"></tbody>
+    </table>
+  </div>
+
+  <div class="text-xs text-slate-500 mt-2">
+    * Ефективна € / час: за FIX делим сумата по FIX на начисляемите часове (мин/макс по ден).
+  </div>
+
+  <div class="font-medium mt-4 mb-1">Разбивка по седмици (текущ месец)</div>
+
+  <div class="overflow-x-auto">
+    <table class="min-w-[1000px] w-full text-sm" id="pay-weeks">
+      <thead>
+        <tr class="text-left text-slate-600 border-b">
+          <th class="py-1.5 pr-3">Седмица</th>
+          <th class="py-1.5 px-3">Работни дни / ч</th>
+          <th class="py-1.5 px-3">Fix</th>
+          <th class="py-1.5 px-3">Договор</th>
+          <th class="py-1.5 px-3">Договореност</th>
+          <th class="py-1.5 px-3">Препоръчано</th>
+        </tr>
+      </thead>
+      <tbody id="pay-weeks-rows"></tbody>
+    </table>
+  </div>
+</div>
+  </div>
+</div>
+<style>
+  .cal-nav{ padding:.25rem .75rem; border:1px solid #e5e7eb; border-radius:.5rem; background:#fff; }
+  .cal-nav:hover{ background:#f8fafc; }
+  .cal-title{ font-weight:600; }
+  .cal{ width:100%; }
+  .cal-weekdays{ display:grid; grid-template-columns:repeat(7,1fr); gap:.25rem; margin-bottom:.25rem; color:#64748b; font-size:.85rem; text-align:center; }
+  .cal-weekdays span{ padding:.25rem 0; }
+  .cal-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:.25rem; user-select:none; }
+  .cal-cell{ position:relative; aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; }
+  .cal-btn{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:1px solid #e5e7eb; border-radius:.75rem; font-size:.95rem; background:#fff; transition: transform .05s ease, background-color .15s ease, border-color .15s ease; }
+  .cal-btn:hover{ background:#f8fafc; transform: translateY(-1px); }
+  .cal-btn:focus{ outline:2px solid #94a3b8; outline-offset:2px; }
+  .is-outmonth .cal-btn{ color:#9ca3af; background:#fafafa; }
+  .is-today .cal-btn{ border-color:#0f172a; box-shadow: inset 0 0 0 1px #0f172a; }
+  .is-picked .cal-btn{ background:#0f172a; color:#fff; border-color:#0f172a; }
+  .is-inrange .cal-btn{ background:#e2e8f0; border-color:#cbd5e1; }
+  .is-range-edge .cal-btn{ background:#0f172a; color:#fff; border-color:#0f172a; }
+  .has-log-dot::after{ content:""; position:absolute; right:.35rem; bottom:.35rem; width:.45rem; height:.45rem; border-radius:9999px; background:#0ea5e9; }
+  .has-log{ display:inline-block; width:.6rem; height:.6rem; border-radius:9999px; background:#0ea5e9; }
+  .has-assign-underline::before{ content:""; position:absolute; left:.5rem; right:.5rem; bottom:.35rem; height:2px; background:#334155; border-radius:2px; }
+  .underline-sample{ display:inline-block; width:1.5rem; height:2px; background:#334155; transform: translateY(3px); }
+  .chip-range{ display:inline-block; width:1.25rem; height:.9rem; border-radius:.3rem; background:#e2e8f0; border:1px solid #cbd5e1; }
+</style>
+
+<script>
+(function(){
+  // ====== ЛОКАЛНА ДАТА ======
+  function parseLocalYMD(ymd){ if(!ymd) return null; const [y,m,d]=ymd.split('-').map(Number); return new Date(y,(m||1)-1,(d||1),12,0,0,0); }
+  function ymdLocal(date){ const y=date.getFullYear(), m=String(date.getMonth()+1).padStart(2,'0'), d=String(date.getDate()).padStart(2,'0'); return `${y}-${m}-${d}`; }
+  function addDays(d,n){ const t=new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12,0,0,0); t.setDate(t.getDate()+n); return t; }
+
+  const logs = {{ driver_logs|default([])|tojson }};
+  const assigned = {{ assigned_orders|default([])|tojson }};
+  const today = new Date(); today.setHours(12,0,0,0);
+
+  const logsByDate = {}; for(const L of logs){ if(L.date){ logsByDate[L.date] = L; } }
+  const orderDayMap = {};
+  for(const o of assigned){
+    const sd = parseLocalYMD(o.start_date || o.startDate || '');
+    const ed = parseLocalYMD(o.end_date || o.endDate || o.start_date || '');
+    if(!sd) continue;
+    let cur = new Date(sd), end = ed || sd;
+    while(cur <= end){ orderDayMap[ ymdLocal(cur) ] = o; cur = addDays(cur,1); }
+  }
+
+  // ====== Календар ======
+  let curMonth = new Date(today.getFullYear(), today.getMonth(), 1, 12,0,0,0);
+  let pickedDate = ymdLocal(today);
+  let pickedRange = null;
+
+  const dayPicked= document.getElementById('day-picked');
+  const diOrder = document.getElementById('di-order');
+  const diOdo   = document.getElementById('di-odo');
+  const diFuel  = document.getElementById('di-fuel');
+  const diExp   = document.getElementById('di-exp');
+  const diHours = document.getElementById('di-hours');
+  const diInc   = document.getElementById('di-inc');
+  const diNotes = document.getElementById('di-notes');
+
+  function drawCalendar(){
+    const grid = document.getElementById('cal-grid');
+    const title = document.getElementById('cal-title');
+    grid.innerHTML = '';
+
+    const y = curMonth.getFullYear(), m = curMonth.getMonth();
+    title.textContent = y + ' · ' + String(m+1).padStart(2,'0');
+
+    const first = new Date(y, m, 1, 12,0,0,0);
+    const startWeekday = (first.getDay()+6)%7;
+    const daysInMonth  = new Date(y, m+1, 0, 12,0,0,0).getDate();
+    const prevMonthDays= new Date(y, m, 0, 12,0,0,0).getDate();
+
+    for(let i=0;i<42;i++){
+      const cell = document.createElement('div'); cell.className='cal-cell';
+      let dayNum, dateObj, inMonth=true;
+
+      if(i < startWeekday){ dayNum = prevMonthDays - startWeekday + 1 + i; dateObj = new Date(y, m-1, dayNum, 12,0,0,0); inMonth=false; }
+      else if(i >= startWeekday + daysInMonth){ dayNum = i - (startWeekday + daysInMonth) + 1; dateObj = new Date(y, m+1, dayNum, 12,0,0,0); inMonth=false; }
+      else { dayNum = i - startWeekday + 1; dateObj = new Date(y, m, dayNum, 12,0,0,0); }
+
+      const key = ymdLocal(dateObj);
+
+      const btn = document.createElement('button');
+      btn.type='button'; btn.className='cal-btn'; btn.textContent=dayNum; btn.dataset.date=key;
+      if(!inMonth) cell.classList.add('is-outmonth');
+      if(key===ymdLocal(today)) cell.classList.add('is-today');
+
+      if(pickedRange && key>=pickedRange.start && key<=pickedRange.end){
+        cell.classList.add('is-inrange'); if(key===pickedRange.start || key===pickedRange.end) cell.classList.add('is-range-edge');
+      }else if(!pickedRange && key===pickedDate){ cell.classList.add('is-picked'); }
+
+      if(logsByDate[key]) cell.classList.add('has-log-dot');
+      if(orderDayMap[key]) cell.classList.add('has-assign-underline');
+
+      cell.appendChild(btn); grid.appendChild(cell);
+    }
+  }
+
+  const gridEl = document.getElementById('cal-grid');
+  let dragging = false;
+  let dragStartKey = null;
+  let dragEndKey = null;
+
+  function keyToDate(key){ const [Y,M,D]=key.split('-').map(Number); return new Date(Y, M-1, D, 12,0,0,0); }
+  function normalizeRange(a,b){
+    if(!a || !b) return null;
+    return (a<=b) ? {start:a, end:b} : {start:b, end:a};
+  }
+
+  function updateVisualSelection(range){
+    gridEl.querySelectorAll('.cal-cell').forEach(cell=>{
+      cell.classList.remove('is-inrange','is-range-edge','is-picked');
+    });
+    if(!range){
+      const pickedBtn = gridEl.querySelector(`[data-date="${pickedDate}"]`);
+      if(pickedBtn) pickedBtn.parentElement.classList.add('is-picked');
+      selectDay(pickedDate);
+      return;
+    }
+    const {start, end} = range;
+    let d = keyToDate(start);
+    const last = keyToDate(end);
+    while(d <= last){
+      const k = ymdLocal(d);
+      const btn = gridEl.querySelector(`[data-date="${k}"]`);
+      if(btn){
+        const cell = btn.parentElement;
+        cell.classList.add('is-inrange');
+        if(k===start || k===end) cell.classList.add('is-range-edge');
+      }
+      d = addDays(d, 1);
+    }
+    if(start === end) selectDay(start); else selectRange(start, end);
+  }
+
+  gridEl.addEventListener('mousedown', (e)=>{
+    const btn = e.target.closest('.cal-btn');
+    if(!btn) return;
+    e.preventDefault();
+    dragging = true;
+    dragStartKey = btn.dataset.date;
+    dragEndKey = btn.dataset.date;
+    pickedRange = { start: dragStartKey, end: dragEndKey };
+    updateVisualSelection(pickedRange);
+  });
+
+  gridEl.addEventListener('mouseover', (e)=>{
+    if(!dragging) return;
+    const btn = e.target.closest('.cal-btn');
+    if(!btn) return;
+    dragEndKey = btn.dataset.date;
+    pickedRange = normalizeRange(dragStartKey, dragEndKey);
+    updateVisualSelection(pickedRange);
+  });
+
+  document.addEventListener('mouseup', ()=>{
+    if(!dragging) return;
+    dragging = false;
+    if(pickedRange && pickedRange.start === pickedRange.end){
+      pickedDate = pickedRange.start;
+      pickedRange = null;
+      updateVisualSelection(null);
+    }
+  });
+
+  gridEl.addEventListener('click', (e)=>{
+    if(dragging) return;
+    const btn = e.target.closest('.cal-btn');
+    if(!btn) return;
+    pickedDate = btn.dataset.date;
+    pickedRange = null;
+    updateVisualSelection(null);
+  });
+
+  document.getElementById('cal-prev').addEventListener('click', ()=>{
+    curMonth = new Date(curMonth.getFullYear(), curMonth.getMonth()-1, 1,12,0,0,0);
+    drawCalendar();
+    updateVisualSelection(pickedRange ? pickedRange : null);
+  });
+  document.getElementById('cal-next').addEventListener('click', ()=>{
+    curMonth = new Date(curMonth.getFullYear(), curMonth.getMonth()+1, 1,12,0,0,0);
+    drawCalendar();
+    updateVisualSelection(pickedRange ? pickedRange : null);
+  });
+
+  function selectDay(dateStr){
+    dayPicked.textContent = dateStr || '—';
+    const L = logsByDate[dateStr] || {};
+    const O = orderDayMap[dateStr] || null;
+
+    diOrder.textContent = O ? ((O.title||('Поръчка #'+O.id)) + ' ('+(O.bus_plate||'—')+')') : '—';
+    diOdo.textContent   = (L.odo_start||'—') + ' → ' + (L.odo_end||'—');
+    diFuel.textContent  = (parseFloat(L.fuel_liters||0)||0)+' l / €'+(parseFloat(L.fuel_amount||0)||0);
+    diExp.textContent   = '€'+(parseFloat(L.tolls||0)||0)+' | €'+(parseFloat(L.parking||0)||0)+' | €'+(parseFloat(L.ferry||0)||0)+' | €'+(parseFloat(L.other_expenses||0)||0);
+    const wh = (typeof L.worked_hours==='number') ? L.worked_hours : parseFloat(L.worked_hours||0);
+    diHours.textContent = (L.work_start||'—')+' → '+(L.work_end||'—')+' ('+(isFinite(wh)?wh.toFixed(2):'0.00')+' ч)';
+    diInc.textContent   = L.incidents || '—';
+    diNotes.textContent = L.notes || '—';
+  }
+
+  function selectRange(startKey,endKey){
+    dayPicked.textContent = startKey + ' → ' + endKey;
+    let cur = parseLocalYMD(startKey), end = parseLocalYMD(endKey);
+    let sumFuelL=0,sumFuelAmt=0,sumTolls=0,sumParking=0,sumFerry=0,sumOther=0,sumHours=0;
+    let orders = new Set();
+
+    while(cur<=end){
+      const k = ymdLocal(cur), L = logsByDate[k], O = orderDayMap[k];
+      if(O) orders.add(O.id);
+      if(L){
+        sumFuelL+=parseFloat(L.fuel_liters||0)||0;
+        sumFuelAmt+=parseFloat(L.fuel_amount||0)||0;
+        sumTolls+=parseFloat(L.tolls||0)||0;
+        sumParking+=parseFloat(L.parking||0)||0;
+        sumFerry+=parseFloat(L.ferry||0)||0;
+        sumOther+=parseFloat(L.other_expenses||0)||0;
+        sumHours+=parseFloat(L.worked_hours||0)||0;
+      }
+      cur = addDays(cur,1);
+    }
+
+    function firstOdoStart(a,b){ let c=parseLocalYMD(a), e=parseLocalYMD(b); while(c<=e){const k=ymdLocal(c),L=logsByDate[k]; if(L&&L.odo_start) return L.odo_start; c=addDays(c,1);} return '—'; }
+    function lastOdoEnd(a,b){ let c=parseLocalYMD(b), e=parseLocalYMD(a); while(c>=e){const k=ymdLocal(c),L=logsByDate[k]; if(L&&L.odo_end) return L.odo_end; c=addDays(c,-1);} return '—'; }
+
+    const oc = orders.size;
+    diOrder.textContent = oc===0 ? '—' : (oc===1 ? ('Поръчка #'+Array.from(orders)[0]) : (oc+' поръчки'));
+    diOdo.textContent   = firstOdoStart(startKey,endKey)+' → '+lastOdoEnd(startKey,endKey);
+    diFuel.textContent  = `${sumFuelL.toFixed(2)} l / €${sumFuelAmt.toFixed(2)}`;
+    diExp.textContent   = `€${sumTolls.toFixed(2)} | €${sumParking.toFixed(2)} | €${sumFerry.toFixed(2)} | €${sumOther.toFixed(2)}`;
+    diHours.textContent = `${sumHours.toFixed(2)} ч общо`;
+    diInc.textContent   = '—';
+    diNotes.textContent = '—';
+  }
+
+  // ====== Статистики и заплащане ======
+  (function(){
+    function startOfWeek(d){ const x=new Date(d); const wd=(x.getDay()+6)%7; x.setDate(x.getDate()-wd); x.setHours(12,0,0,0); return x; }
+    function endOfWeek(d){ const s=startOfWeek(d); return addDays(s,6); }
+    function startOfMonth(d){ return new Date(d.getFullYear(), d.getMonth(), 1, 12,0,0,0); }
+    function endOfMonth(d){ return new Date(d.getFullYear(), d.getMonth()+1, 0, 12,0,0,0); }
+
+    function sumHoursBetween(a,b){
+      let sum=0;
+      for(let d=new Date(a); d<=b; d=addDays(d,1)){
+        const k = ymdLocal(d), L = logsByDate[k];
+        if(L) sum += parseFloat(L.worked_hours||0)||0;
+      }
+      return sum;
+    }
+
+    const allLogDates = Object.keys(logsByDate).sort();
+    const today = new Date(); today.setHours(12,0,0,0);
+    const latestWithLog = allLogDates.filter(k => parseLocalYMD(k) <= today).pop();
+    const refKey = latestWithLog || ymdLocal(today);
+    const refDate = parseLocalYMD(refKey);
+
+    const sow = startOfWeek(refDate), eow = endOfWeek(refDate);
+    const som = startOfMonth(refDate), eom = endOfMonth(refDate);
+
+    const hRefDay = (logsByDate[refKey] ? (parseFloat(logsByDate[refKey].worked_hours||0)||0) : 0);
+    const hWeek  = sumHoursBetween(sow, eow);
+    const hMonth = sumHoursBetween(som, eom);
+
+    document.getElementById('cur-day-h').textContent   = hRefDay.toFixed(2) + ' ч';
+    document.getElementById('cur-week-h').textContent  = hWeek.toFixed(2)  + ' ч';
+    document.getElementById('cur-month-h').textContent = hMonth.toFixed(2) + ' ч';
+
+    // === Ставки ===
+    const PAY = {{ payroll_settings|default({})|tojson }};
+    const DAILY_FIXED     = Number((PAY && PAY.daily_fixed)!=null ? PAY.daily_fixed : 0);
+    const HOURLY_CONTRACT = Number((PAY && PAY.hourly_contract)!=null ? PAY.hourly_contract
+                                 : ((PAY && PAY.hourly_rate)!=null ? PAY.hourly_rate
+                                 : ((PAY && PAY.kv_per_day)!=null ? PAY.kv_per_day : 0)));
+    const HOURLY_CUSTOM   = Number((PAY && PAY.hourly_custom)!=null ? PAY.hourly_custom
+                                 : ((PAY && PAY.hourly_rate)!=null ? PAY.hourly_rate : 0));
+    const MIN_HOURS       = Number((PAY && PAY.min_hours)!=null ? PAY.min_hours : 0);
+    const MAX_HOURS       = Number((PAY && PAY.max_hours)!=null ? PAY.max_hours : 24);
+
+    const _MIN = Math.max(0, Math.min(MIN_HOURS, MAX_HOURS));
+    const _MAX = Math.max(_MIN, MAX_HOURS);
+
+    function clampHoursPerDay(h){
+      if(!isFinite(h)) return 0;
+      return Math.min(Math.max(h, _MIN || 0), _MAX || 24);
+    }
+    function billableHoursBetween(a,b){
+      let sum=0;
+      for(let d=new Date(a); d<=b; d=addDays(d,1)){
+        const k = ymdLocal(d), L = logsByDate[k];
+        const h = L ? (parseFloat(L.worked_hours||0)||0) : 0;
+        sum += clampHoursPerDay(h);
+      }
+      return sum;
+    }
+    function workedDaysBetween(a,b, minHours){
+      const thr = (minHours!=null) ? minHours : 0.01;
+      let days=0;
+      for(let d=new Date(a); d<=b; d=addDays(d,1)){
+        const k=ymdLocal(d), L=logsByDate[k];
+        const h = L ? (parseFloat(L.worked_hours||0)||0) : 0;
+        if(h >= thr) days += 1;
+      }
+      return days;
+    }
+
+    const hDayBill   = clampHoursPerDay(hRefDay);
+    const hWeekBill  = billableHoursBetween(sow, eow);
+    const hMonthBill = billableHoursBetween(som, eom);
+
+    const workedDaysWeek  = workedDaysBetween(sow, eow);
+    const workedDaysMonth = workedDaysBetween(som, eom);
+    const workedDayRef    = (hRefDay >= 0.01) ? 1 : 0;
+
+
+    // ===== Отделен контейнер: сравнение на схеми =====
+    function euros(n){ return '€'+(Number(n)||0).toFixed(2); }
+    function effectiveHourly(eurosValue, hoursValue){
+      const h = Number(hoursValue)||0; if(h<=0.0001) return 0; return (Number(eurosValue)||0)/h;
+    }
+    function breakEvenHoursPerDay(fixedPerDay, hourlyRate){
+      const r = Number(hourlyRate)||0; if(r<=0) return 0; return fixedPerDay / r;
+    }
+    function projectTo(endDate, modeAvg){
+      const tomorrow = addDays(refDate, 1);
+      function remainingDays(a,b){ let cnt=0; for(let d=new Date(tomorrow); d<=b; d=addDays(d,1)) cnt++; return cnt; }
+      const hoursSoFarWeek  = billableHoursBetween(sow, refDate);
+      const hoursSoFarMonth = billableHoursBetween(som, refDate);
+      const daysSoFarWeek   = workedDaysBetween(sow, refDate);
+      const daysSoFarMonth  = workedDaysBetween(som, refDate);
+      const avgHWeek  = daysSoFarWeek  > 0 ? (hoursSoFarWeek  / daysSoFarWeek)  : 0;
+      const avgHMonth = daysSoFarMonth > 0 ? (hoursSoFarMonth / daysSoFarMonth) : 0;
+      const rem = remainingDays(refDate, endDate);
+      let projWorkedDays = 0, projBillHours  = 0;
+      if(modeAvg){
+        const avgH = (endDate <= eow) ? (avgHWeek || clampHoursPerDay(hRefDay)) : (avgHMonth || clampHoursPerDay(hRefDay));
+        projWorkedDays = rem;
+        projBillHours  = rem * avgH;
+      }
+      return { projWorkedDays, projBillHours };
+    }
+    function renderWeeklyBreakdown(monthStart, monthEnd){
+      const tbody = document.getElementById('pay-weeks-rows'); if(!tbody) return;
+      tbody.innerHTML = '';
+      let d = startOfWeek(monthStart);
+      const last = endOfWeek(monthEnd);
+      while(d <= last){
+        const wStart = new Date(d);
+        const wEnd   = endOfWeek(wStart);
+        const s = wStart < monthStart ? monthStart : wStart;
+        const e = wEnd   > monthEnd   ? monthEnd   : wEnd;
+
+        const workedDays = workedDaysBetween(s, e);
+        const billH      = billableHoursBetween(s, e);
+
+        const fix = workedDays * DAILY_FIXED;
+        const con = billH * HOURLY_CONTRACT;
+        const cus = billH * HOURLY_CUSTOM;
+
+        const best = Math.min(fix, con, cus);
+	const bestLabel =
+  	   (best === fix) ? 'Fix' :
+  	   (best === con) ? 'Договор' : 'Договореност';
+
+        const tr = document.createElement('tr');
+        tr.className = 'border-b last:border-0';
+        tr.innerHTML = `
+          <td class="py-1.5 pr-3 whitespace-nowrap">${ymdLocal(wStart)} → ${ymdLocal(wEnd)}</td>
+          <td class="py-1.5 px-3">${workedDays} дн / ${billH.toFixed(2)} ч</td>
+          <td class="py-1.5 px-3">${euros(fix)}</td>
+          <td class="py-1.5 px-3">${euros(con)}</td>
+          <td class="py-1.5 px-3">${euros(cus)}</td>
+          <td class="py-1.5 px-3">
+            <span class="inline-block px-2 py-0.5 rounded-full text-xs bg-emerald-50 border border-emerald-200 text-emerald-700">${bestLabel}</span>
+          </td>
+        `;
+        tbody.appendChild(tr);
+        d = addDays(wEnd, 1);
+      }
+    }
+
+    function recomputePay(){
+      const projChk = document.getElementById('proj-like-avg');
+      const modeAvg = !!(projChk && projChk.checked);
+
+      const fix_day    = DAILY_FIXED * ((hRefDay >= 0.01)?1:0);
+      const fix_week   = DAILY_FIXED * workedDaysWeek;
+      const fix_month  = DAILY_FIXED * workedDaysMonth;
+
+      const con_day    = clampHoursPerDay(hRefDay) * HOURLY_CONTRACT;
+      const con_week   = hWeekBill * HOURLY_CONTRACT;
+      const con_month  = hMonthBill * HOURLY_CONTRACT;
+
+      const cus_day    = clampHoursPerDay(hRefDay) * HOURLY_CUSTOM;
+      const cus_week   = hWeekBill * HOURLY_CUSTOM;
+      const cus_month  = hMonthBill * HOURLY_CUSTOM;
+
+      const prW = projectTo(eow, modeAvg);
+      const prM = projectTo(eom, modeAvg);
+
+      const fix_week_proj  = DAILY_FIXED * (workedDaysWeek + prW.projWorkedDays);
+      const fix_month_proj = DAILY_FIXED * (workedDaysMonth + prM.projWorkedDays);
+
+      const con_week_proj  = (hWeekBill  + prW.projBillHours) * HOURLY_CONTRACT;
+      const con_month_proj = (hMonthBill + prM.projBillHours) * HOURLY_CONTRACT;
+
+      const cus_week_proj  = (hWeekBill  + prW.projBillHours) * HOURLY_CUSTOM;
+      const cus_month_proj = (hMonthBill + prM.projBillHours) * HOURLY_CUSTOM;
+
+      const eff_fix_hour  = effectiveHourly(fix_week,  hWeekBill);
+      const eff_con_hour  = HOURLY_CONTRACT;
+      const eff_cus_hour  = HOURLY_CUSTOM;
+
+      const be_con = breakEvenHoursPerDay(DAILY_FIXED, HOURLY_CONTRACT);
+      const be_cus = breakEvenHoursPerDay(DAILY_FIXED, HOURLY_CUSTOM);
+
+      const rows = [
+        { name:'Fix (дневна)', d:fix_day, w:fix_week, wp:fix_week_proj, m:fix_month, mp:fix_month_proj, eff:eff_fix_hour, be:'—' },
+        { name:'По договор', d:con_day, w:con_week, wp:con_week_proj, m:con_month, mp:con_month_proj, eff:eff_con_hour, be:be_con.toFixed(2) },
+        { name:'По договореност', d:cus_day, w:cus_week, wp:cus_week_proj, m:cus_month, mp:cus_month_proj, eff:eff_cus_hour, be:be_cus.toFixed(2) },
+      ];
+
+      function bestIndexBy(field){
+        const vals = rows.map(r => Number(r[field])||0);
+        const max = Math.max.apply(null, vals);
+        return vals.findIndex(v => v===max);
+      }
+      const bestW  = bestIndexBy('w');
+      const bestWP = bestIndexBy('wp');
+      const bestM  = bestIndexBy('m');
+      const bestMP = bestIndexBy('mp');
+
+      const tb = document.getElementById('pay-rows'); if(!tb) return;
+      tb.innerHTML = '';
+      rows.forEach((r, idx)=>{
+        const tr = document.createElement('tr');
+        tr.className = 'border-b last:border-0';
+        function cell(txt, isBest){ return `<td class="py-1.5 px-3 ${isBest?'bg-emerald-50 font-medium':''}">${txt}</td>`; }
+        tr.innerHTML =
+          `<td class="py-1.5 pr-3 font-medium">${r.name}</td>` +
+          cell(euros(r.d), false) +
+          cell(euros(r.w), idx===bestW) +
+          cell(euros(r.wp), idx===bestWP) +
+          cell(euros(r.m), idx===bestM) +
+          cell(euros(r.mp), idx===bestMP) +
+          `<td class="py-1.5 px-3">${r.eff>0 ? r.eff.toFixed(2) : '—'}</td>` +
+          `<td class="py-1.5 px-3">${r.be}</td>`;
+        tb.appendChild(tr);
+      });
+
+      renderWeeklyBreakdown(som, eom);
+    }
+
+    const projChkEl = document.getElementById('proj-like-avg');
+    if(projChkEl){ projChkEl.addEventListener('change', recomputePay); }
+    recomputePay();
+  })();
+
+  // първоначално рендериране на календара
+  drawCalendar();
+  updateVisualSelection(null);
+})(); 
+</script>
+
+{% endblock %}

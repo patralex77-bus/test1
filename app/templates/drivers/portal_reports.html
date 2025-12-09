@@ -1,0 +1,191 @@
+{% extends "drivers/base_driver.html" %}
+{% set active_page = 'reports' %}
+{% block title %}Отчети · {{ (current_driver.last_name ~ ' ' ~ current_driver.first_name)|trim }}{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+
+  <!-- Бутон Назад към Fahrer менюто -->
+  <a href="{{ url_for('driver_portal.fahrer') }}"
+     class="inline-flex items-center gap-1 px-3 py-1.5 mb-2 rounded-lg border text-xs text-slate-600 hover:bg-slate-50">
+    ‹ Назад
+  </a>
+
+  <!-- Заглавие + избор на месец -->
+  <header class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h1 class="text-lg font-semibold">
+        Отчети – {{ (current_driver.last_name ~ ' ' ~ current_driver.first_name)|trim }}
+      </h1>
+      <p class="text-xs text-slate-500 mt-1">
+        Обобщение по часове, километри и разходи за избрания месец.
+      </p>
+    </div>
+
+    <!-- Навигация по месеци -->
+    <form method="get"
+          action="{{ url_for('driver_portal.reports') }}"
+          class="flex items-center gap-2 text-xs">
+      <a href="{{ url_for('driver_portal.reports', month=prev_month_value) }}"
+         class="px-2 py-1 rounded-lg border text-slate-600 hover:bg-slate-50">
+        ‹ Предишен месец
+      </a>
+
+      <div class="px-2 py-1 bg-slate-50 rounded-lg border text-slate-700 flex items-center gap-2">
+        <input type="month"
+               name="month"
+               value="{{ month_value }}"
+               class="border-none bg-transparent text-xs focus:outline-none focus:ring-0">
+        <button type="submit" class="text-[11px] uppercase tracking-wide text-slate-500">
+          Смени
+        </button>
+      </div>
+
+      <a href="{{ url_for('driver_portal.reports', month=next_month_value) }}"
+         class="px-2 py-1 rounded-lg border text-slate-600 hover:bg-slate-50">
+        Следващ месец ›
+      </a>
+    </form>
+  </header>
+
+  <!-- Обобщение за месеца -->
+  <section class="bg-white rounded-2xl p-4 shadow-sm">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-sm font-semibold">
+          Обобщение за {{ month_label }}
+        </h2>
+        <p class="text-[11px] text-slate-400">
+          Суми за всички дни с отчет за този шофьор.
+        </p>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+      <div class="border rounded-xl px-3 py-2">
+        <div class="text-xs text-slate-500 mb-1">Часове</div>
+        <div class="text-xl font-semibold">
+          {{ "%.2f"|format(totals.hours) }}
+        </div>
+      </div>
+      <div class="border rounded-xl px-3 py-2">
+        <div class="text-xs text-slate-500 mb-1">Километри</div>
+        <div class="text-xl font-semibold">
+          {{ "%.1f"|format(totals.km) }} km
+        </div>
+      </div>
+      <div class="border rounded-xl px-3 py-2">
+        <div class="text-xs text-slate-500 mb-1">Разходи общо</div>
+        <div class="text-xl font-semibold">
+          {{ "%.2f"|format(totals.costs) }} лв
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- По дни -->
+  <section class="bg-white rounded-2xl p-4 shadow-sm">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold">
+        Разбивка по дни
+      </h2>
+      <span class="text-[11px] text-slate-400">Само дните с данни</span>
+    </div>
+
+    {% if stats_day|length == 0 %}
+      <div class="text-xs text-slate-500">
+        Няма дневници за този месец.
+      </div>
+    {% else %}
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-xs">
+          <thead class="bg-slate-50 text-slate-500">
+            <tr>
+              <th class="px-3 py-2 text-left font-medium">Дата</th>
+              <th class="px-3 py-2 text-right font-medium">Часове</th>
+              <th class="px-3 py-2 text-right font-medium">Км</th>
+              <th class="px-3 py-2 text-right font-medium">Разходи</th>
+              <th class="px-3 py-2 text-left font-medium">Автобуси</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for d in stats_day %}
+              {% if d.hours or d.km or d.costs %}
+                <tr class="hover:bg-slate-50/80">
+                  <td class="px-3 py-1.5 whitespace-nowrap">
+                    {{ d.date_human }}
+                  </td>
+                  <td class="px-3 py-1.5 text-right whitespace-nowrap">
+                    {{ "%.2f"|format(d.hours) }}
+                  </td>
+                  <td class="px-3 py-1.5 text-right whitespace-nowrap">
+                    {{ "%.1f"|format(d.km) }}
+                  </td>
+                  <td class="px-3 py-1.5 text-right whitespace-nowrap">
+                    {{ "%.2f"|format(d.costs) }}
+                  </td>
+                  <td class="px-3 py-1.5 whitespace-nowrap">
+                    {% if d.buses %}
+                      {{ d.buses|join(', ') }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </section>
+
+  <!-- По седмици -->
+  <section class="bg-white rounded-2xl p-4 shadow-sm">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold">
+        Разбивка по седмици (Пн–Нд)
+      </h2>
+      <span class="text-[11px] text-slate-400">Календарни седмици в месеца</span>
+    </div>
+
+    {% if stats_week|length == 0 %}
+      <div class="text-xs text-slate-500">
+        Няма данни по седмици за този месец.
+      </div>
+    {% else %}
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-xs">
+          <thead class="bg-slate-50 text-slate-500">
+            <tr>
+              <th class="px-3 py-2 text-left font-medium">Седмица</th>
+              <th class="px-3 py-2 text-right font-medium">Часове</th>
+              <th class="px-3 py-2 text-right font-medium">Км</th>
+              <th class="px-3 py-2 text-right font-medium">Разходи</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for w in stats_week %}
+              <tr class="hover:bg-slate-50/80">
+                <td class="px-3 py-1.5 whitespace-nowrap">
+                  Седмица {{ w.week_in_month }} ({{ w.range_start }} – {{ w.range_end }})
+                </td>
+                <td class="px-3 py-1.5 text-right whitespace-nowrap">
+                  {{ "%.2f"|format(w.hours) }}
+                </td>
+                <td class="px-3 py-1.5 text-right whitespace-nowrap">
+                  {{ "%.1f"|format(w.km) }}
+                </td>
+                <td class="px-3 py-1.5 text-right whitespace-nowrap">
+                  {{ "%.2f"|format(w.costs) }}
+                </td>
+               </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </section>
+
+</div>
+{% endblock %}

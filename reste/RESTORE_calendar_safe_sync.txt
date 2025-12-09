@@ -1,0 +1,23 @@
+If the calendar broke after previous inline scripts:
+- Open app/blueprints/calendar/templates/calendar/index.html
+- REMOVE any previously added <script> that fetched /orders/api/list.
+- The Orders page now writes orders safely to localStorage on load.
+- If you still want auto-pull on calendar, insert this SAFE snippet at the bottom:
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  fetch('/orders/api/list').then(r=>r.json()).then(data=>{
+    const orders = Array.isArray(data.orders) ? data.orders : [];
+    try{ localStorage.setItem('busops:orders_v1', JSON.stringify(orders)); }catch(e){}
+    try{ localStorage.setItem('orders_fallback_store_v1', JSON.stringify(orders)); }catch(e){}
+    try{
+      if(window.OrdersShared && typeof window.OrdersShared.ingest === 'function'){
+        window.OrdersShared.ingest(orders);
+      }
+    }catch(e){}
+    try{
+      if(window.Calendar && typeof window.Calendar.rerender==='function'){ window.Calendar.rerender(); }
+    }catch(e){}
+  }).catch(()=>{});
+});
+</script>

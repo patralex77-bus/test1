@@ -1,0 +1,344 @@
+{% extends "drivers/base_driver.html" %}
+{% set active_page = 'logs' %}
+{% set current_driver = {'name': (driver.last_name ~ ' ' ~ driver.first_name)|trim} %}
+{% block title %}Дневник{% endblock %}
+
+{% block content %}
+
+<h1 class="text-lg font-semibold mb-3">
+  Дневник — {{ current_driver.name }}
+</h1>
+
+{% if not order %}
+  <div class="bg-white shadow rounded-2xl p-4 text-sm text-slate-600">
+    В момента няма активна поръчка, към която да попълваш дневник.
+    Ако смяташ, че това е грешка — свържи се с офиса.
+  </div>
+{% else %}
+
+  {# ---- Карта с информация за поръчката ---- #}
+  <div class="bg-white shadow rounded-2xl p-4 mb-4 text-sm">
+    <div class="flex flex-col gap-1">
+      <div class="font-semibold">
+        Поръчка #{{ order.id }}{% if order.title %}: {{ order.title }}{% endif %}
+      </div>
+      <div class="text-slate-600">
+        Период:
+        <strong>{{ (order.start_date or order.date)[:10] }}</strong>
+        –
+        <strong>{{ (order.end_date or order.start_date or order.date)[:10] }}</strong>
+      </div>
+      {% if order.bus_plate or order.vehicle_plate %}
+        <div class="text-slate-600">
+          Автобус: <strong>{{ order.bus_plate or order.vehicle_plate }}</strong>
+        </div>
+      {% endif %}
+      <div class="text-xs text-slate-400 mt-1">
+        Попълване е позволено само за днешния ден (според датата на телефона/компютъра).
+      </div>
+    </div>
+  </div>
+
+  {# ---- Списък с дни от поръчката ---- #}
+  <div class="bg-white shadow rounded-2xl p-4 text-sm space-y-4">
+
+    <h2 class="text-sm font-semibold">
+      Дни от поръчката
+    </h2>
+
+    <div class="space-y-3">
+      {% for d in days %}
+        {% set log = logs[d] if logs and logs[d] is defined else {} %}
+        <div class="border rounded-2xl p-3 driver-log-card" data-date="{{ d }}">
+          <div class="flex items-center justify-between gap-2">
+            <div>
+              <div class="font-medium flex items-center gap-2">
+                {{ d|replace('-', '.') }}
+                <span class="hidden ml-1 inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] badge-today">
+                  Днес
+                </span>
+              </div>
+
+              {# кратко резюме, ако има данни #}
+              {% if log.work_start %}
+                <div class="text-xs text-slate-500 mt-0.5">
+                  Работно време: {{ log.work_start }}–{{ log.work_end }}
+                  {% if log.worked_hours is not none %}
+                    ({{ "%.2f"|format(log.worked_hours) }} ч)
+                  {% endif %}
+                </div>
+              {% endif %}
+              {% if log.odo_start or log.odo_end %}
+                <div class="text-xs text-slate-500">
+                  Одометър: {{ log.odo_start or "—" }} → {{ log.odo_end or "—" }}
+                </div>
+              {% endif %}
+              {% if log.fuel_liters or log.fuel_amount %}
+                <div class="text-xs text-slate-500">
+                  Гориво: {{ log.fuel_liters or 0 }} л / {{ log.fuel_amount or 0 }} €
+                </div>
+              {% endif %}
+              {% if log.other_expenses %}
+                <div class="text-xs text-slate-500">
+                  Други разходи: {{ log.other_expenses }} €
+                </div>
+              {% endif %}
+              {% if log.notes %}
+                <div class="text-xs text-slate-500 mt-0.5">
+                  Бележки: {{ log.notes }}
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="text-xs text-slate-400 not-today-label">
+              {% if log %}
+                Попълнен
+              {% else %}
+                Непопълнен
+              {% endif %}
+            </div>
+          </div>
+
+          {# ==== Форма за този ден (ще бъде активна само за днес) ==== #}
+          <details class="mt-3 group log-details">
+            <summary class="flex items-center justify-between cursor-pointer select-none">
+              <span class="text-xs text-slate-600 group-open:font-semibold">
+                {% if log %}Преглед / редакция{% else %}Попълни дневник{% endif %}
+              </span>
+              <span class="text-xs text-slate-400 group-open:hidden">▶</span>
+              <span class="text-xs text-slate-400 hidden group-open:inline">▼</span>
+            </summary>
+            <div class="mt-3 pt-3 border-t">
+              <form
+                class="space-y-3 driver-log-form"
+                data-save-url="{{ url_for('drivers.portal_save', token=token) }}"
+                data-date="{{ d }}"
+              >
+                <input type="hidden" name="date" value="{{ d }}"/>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Начало на работа (HH:MM)
+                    </label>
+                    <input type="time"
+                           name="work_start"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.work_start if log.work_start is defined else '' }}">
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Край на работа (HH:MM)
+                    </label>
+                    <input type="time"
+                           name="work_end"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.work_end if log.work_end is defined else '' }}">
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Одометър начало
+                    </label>
+                    <input type="number"
+                           name="odo_start"
+                           step="1"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.odo_start if log.odo_start is defined and log.odo_start is not none else '' }}">
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Одометър край
+                    </label>
+                    <input type="number"
+                           name="odo_end"
+                           step="1"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.odo_end if log.odo_end is defined and log.odo_end is not none else '' }}">
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Гориво (литри)
+                    </label>
+                    <input type="number"
+                           name="fuel_liters"
+                           step="0.01"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.fuel_liters if log.fuel_liters is defined and log.fuel_liters is not none else '' }}">
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Гориво (сума, €)
+                    </label>
+                    <input type="number"
+                           name="fuel_amount"
+                           step="0.01"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.fuel_amount if log.fuel_amount is defined and log.fuel_amount is not none else '' }}">
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Тол / магистрали (€)
+                    </label>
+                    <input type="number"
+                           name="tolls"
+                           step="0.01"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.tolls if log.tolls is defined and log.tolls is not none else '' }}">
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Паркинг (€)
+                    </label>
+                    <input type="number"
+                           name="parking"
+                           step="0.01"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.parking if log.parking is defined and log.parking is not none else '' }}">
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Ферибот (€)
+                    </label>
+                    <input type="number"
+                           name="ferry"
+                           step="0.01"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.ferry if log.ferry is defined and log.ferry is not none else '' }}">
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">
+                      Други разходи (€)
+                    </label>
+                    <input type="number"
+                           name="other_expenses"
+                           step="0.01"
+                           class="w-full border rounded-lg px-3 py-2 text-sm"
+                           value="{{ log.other_expenses if log.other_expenses is defined and log.other_expenses is not none else '' }}">
+                  </div>
+                </div>
+
+                <div>
+                  <label class="block text-xs font-medium text-slate-600 mb-1">
+                    Инциденти / проверки
+                  </label>
+                  <textarea name="incidents"
+                            rows="2"
+                            class="w-full border rounded-lg px-3 py-2 text-sm resize-y">{{ log.incidents if log.incidents is defined else '' }}</textarea>
+                </div>
+
+                <div>
+                  <label class="block text-xs font-medium text-slate-600 mb-1">
+                    Бележки
+                  </label>
+                  <textarea name="notes"
+                            rows="2"
+                            class="w-full border rounded-lg px-3 py-2 text-sm resize-y">{{ log.notes if log.notes is defined else '' }}</textarea>
+                </div>
+
+                <div class="flex items-center justify-between gap-2 pt-2">
+                  <div class="text-xs text-slate-500 form-status"></div>
+
+                  <button type="submit"
+                          class="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700">
+                    Запази дневника
+                  </button>
+                </div>
+              </form>
+            </div>
+          </details>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+      document.querySelectorAll('.driver-log-card').forEach(function (card) {
+        const date = card.getAttribute('data-date');
+        const isToday = (date === todayStr);
+
+        const badge = card.querySelector('.badge-today');
+        const notTodayLabel = card.querySelector('.not-today-label');
+        const details = card.querySelector('.log-details');
+
+        if (isToday) {
+          if (badge) badge.classList.remove('hidden');
+          if (notTodayLabel) notTodayLabel.textContent = 'Можеш да попълниш този ден.';
+          // оставяме details отворени за удобство
+        } else {
+          if (badge) badge.classList.add('hidden');
+          if (notTodayLabel) {
+            notTodayLabel.textContent = 'Само днешният ден може да се редактира.';
+          }
+        }
+      });
+
+      document.querySelectorAll('.driver-log-form').forEach(function (form) {
+        const saveUrl = form.getAttribute('data-save-url');
+        const statusEl = form.querySelector('.form-status');
+        const date = form.getAttribute('data-date');
+
+        form.addEventListener('submit', function (e) {
+          e.preventDefault();
+
+          const todayStrLocal = new Date().toISOString().slice(0, 10);
+          if (date !== todayStrLocal) {
+            if (statusEl) {
+              statusEl.textContent = 'Можеш да записваш само за днешната дата.';
+            }
+            return;
+          }
+
+          if (statusEl) statusEl.textContent = 'Записване...';
+
+          const formData = new FormData(form);
+
+          fetch(saveUrl, {
+            method: 'POST',
+            body: formData
+          })
+            .then(resp => resp.json())
+            .then(data => {
+              if (data && data.ok) {
+                if (statusEl) {
+                  statusEl.textContent = 'Запазено успешно. Часове: ' + (data.hours ?? '');
+                }
+                setTimeout(function () {
+                  window.location.reload();
+                }, 800);
+              } else {
+                if (statusEl) {
+                  statusEl.textContent = (data && data.error)
+                    ? ('Грешка: ' + data.error)
+                    : 'Възникна грешка при запис.';
+                }
+              }
+            })
+            .catch(err => {
+              console.error(err);
+              if (statusEl) {
+                statusEl.textContent = 'Мрежова грешка при запис.';
+              }
+            });
+        });
+      });
+    })();
+  </script>
+
+{% endif %}
+
+{% endblock %}

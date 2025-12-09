@@ -1,0 +1,780 @@
+{% extends "base.html" %}
+{% block title %}Поръчки · Списък{% endblock %}
+{% block content %}
+
+<h1 class="text-xl font-semibold mb-4">Поръчки</h1>
+
+<!-- ===== Банер за конфликти при назначаване ===== -->
+<div id="conflict-banner" class="hidden mb-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 p-3 flex items-start justify-between gap-4">
+  <div>
+    <div class="font-semibold">ВНИМАНИЕ: Конфликт при назначаване</div>
+    <div id="conflict-text" class="text-sm mt-1">Има застъпване с друга поръчка.</div>
+  </div>
+  <div class="flex gap-2 shrink-0">
+    <button id="conflict-cancel" class="px-3 py-2 rounded-lg border">Откажи</button>
+    <button id="conflict-assign-anyway" class="px-3 py-2 rounded-lg border bg-amber-200 hover:bg-amber-300">Назначи въпреки това</button>
+  </div>
+</div>
+
+<!-- ===== Панел за търсене / филтри ===== -->
+<div class="bg-white shadow rounded-2xl p-4 mb-4">
+  <form id="filter-form" class="grid md:grid-cols-5 gap-3 items-end">
+    <div class="md:col-span-2">
+      <label class="block text-sm text-slate-600">Търсене (описание / автобус / статус)</label>
+      <input id="f-text" class="mt-1 w-full border rounded-xl px-3 py-2" placeholder="например: София, ЕВ1234" />
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600">От дата</label>
+      <input id="f-from" type="date" class="mt-1 w-full border rounded-xl px-3 py-2" />
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600">До дата</label>
+      <input id="f-to" type="date" class="mt-1 w-full border rounded-xl px-3 py-2" />
+    </div>
+    <div class="flex gap-2">
+      <button type="button" id="btn-apply" class="mt-6 px-4 py-2 rounded-xl border">Филтрирай</button>
+      <button type="button" id="btn-clear" class="mt-6 px-4 py-2 rounded-xl border">Изчисти</button>
+    </div>
+  </form>
+</div>
+
+<div class="space-y-4">
+
+  <!-- === ТЕКУЩИ (днес -> бъдеще) === -->
+  <details open class="bg-white shadow rounded-2xl">
+    <summary class="select-none cursor-pointer px-4 py-3 flex items-center justify-between">
+      <span class="text-lg font-semibold">Текущи поръчки</span>
+      <span class="text-slate-500 text-sm">(от днес нататък)</span>
+    </summary>
+    <div class="p-4 pt-0">
+      <div class="overflow-auto">
+        <table class="min-w-[1100px] w-full text-sm">
+          <thead>
+            <tr class="text-left text-slate-600 border-b">
+              <th class="py-2 pr-3">Описание</th>
+              <th class="py-2 px-3">Начална дата</th>
+              <th class="py-2 px-3">Крайна дата</th>
+              <th class="py-2 px-3">Автобус</th>
+              <th class="py-2 px-3">PAX</th>
+              <th class="py-2 px-3">Статус</th>
+              <th class="py-2 px-3 text-right">Цена (€)</th>
+              <th class="py-2 px-3 text-right">Брутна печалба (€)</th>
+              <th class="py-2 px-3 text-right">% Маржа</th>
+              <th class="py-2 pl-3 pr-1 text-right">Действия</th>
+            </tr>
+          </thead>
+          <tbody id="tbl-current">
+            {% for o in current_orders %}
+            {% set unassigned = not o.driver_id %}
+            <tr id="row-order-{{ o.id }}"
+                class="border-b last:border-0 {% if unassigned %}bg-rose-50/40 hover:bg-rose-50{% endif %}"
+                data-title="{{ (o.title or ('Поръчка #' ~ o.id)) | e }}"
+                data-start="{{ o.start_date or '' }}"
+                data-end="{{ o.end_date or o.start_date or '' }}"
+                data-bus="{{ o.bus_plate or '' }}"
+                data-status="{{ o.status or 'Планирана' }}"
+                data-driver="{{ o.driver_name or '' }}">
+              <td class="py-2 pr-3 font-medium">
+                <div class="flex items-center gap-2">
+                  <span>{{ o.title or ("Поръчка #" ~ o.id) }}</span>
+                  {% if o.driver_id %}
+                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200" title="Назначена на {{ o.driver_name or ('шофьор #' ~ o.driver_id) }}">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                      </svg>
+                      Назначена{% if o.driver_name %} · {{ o.driver_name }}{% endif %}
+                    </span>
+                  {% else %}
+                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200" title="Няма зачислен шофьор">
+                      • Без шофьор
+                    </span>
+                  {% endif %}
+                </div>
+              </td>
+              <td class="py-2 px-3 whitespace-nowrap">{{ o.start_date or "" }}</td>
+              <td class="py-2 px-3 whitespace-nowrap">{{ o.end_date or o.start_date or "" }}</td>
+              <td class="py-2 px-3">{{ o.bus_plate or "" }}</td>
+              <td class="py-2 px-3">—</td>
+              <td class="py-2 px-3">{{ o.status or "Планирана" }}</td>
+              <td class="py-2 px-3 text-right">{{ (o.price or "0") }}</td>
+              <td class="py-2 px-3 text-right">{{ "%.2f"|format(o.gross_profit or 0) }}</td>
+              <td class="py-2 px-3 text-right">{{ "%.2f"|format(o.margin_pct or 0) }}%</td>
+              <td class="py-2 pl-3 pr-1">
+                <div class="flex justify-end gap-2">
+                  <!-- Кабинет (панел) -->
+                  <button type="button"
+                          class="p-2 rounded-lg hover:bg-slate-100 js-open-desk"
+                          data-order-id="{{ o.id }}"
+                          title="Кабинет (резюме, файлове, задачи, съобщения)">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" viewBox="0 0 24 24" fill="none" stroke-width="1.8">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M3 7h18M3 12h18M3 17h18"/>
+                    </svg>
+                  </button>
+
+                  <!-- Назначи на шофьор (падащо меню) -->
+                  <button type="button"
+                          class="p-2 rounded-lg js-assign-driver {{ 'opacity-40 pointer-events-none' if o.driver_id else 'hover:bg-slate-100' }}"
+                          data-order-id="{{ o.id }}"
+                          data-start="{{ o.start_date or '' }}"
+                          data-end="{{ o.end_date or o.start_date or '' }}"
+                          data-assigned="{{ '1' if o.driver_id else '0' }}"
+                          data-driver-name="{{ o.driver_name or '' }}"
+                          title="{{ 'Вече е назначена на ' ~ o.driver_name if o.driver_id else 'Назначи на шофьор' }}">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a4 4 0 11-8 0 4 4 0 018 0zM6 21v-1a6 6 0 0112 0v1M19 8h3m-1.5-1.5v3"/>
+                    </svg>
+                  </button>
+
+                  <!-- Редактирай -->
+                  <a href="{{ url_for('orders.entry') }}?edit={{ o.id }}" class="p-2 rounded-lg hover:bg-slate-100" title="Редактирай">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487a2.25 2.25 0 113.182 3.182L7.5 20.213 3 21l.787-4.5L16.862 4.487z"/>
+                    </svg>
+                  </a>
+                  <!-- Изтрий -->
+                  <button type="button" class="p-2 rounded-lg hover:bg-red-50 js-del" data-id="{{ o.id }}" title="Изтрий">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-red-600" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2m1 0l-.867 12.142A2 2 0 0113.138 21H10.86a2 2 0 01-1.995-1.858L8 7h8"/>
+                    </svg>
+                  </button>
+                </div>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="10" class="py-6 text-center text-slate-500">Няма текущи поръчки.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </details>
+
+  <!-- === АРХИВ (всички останали) === -->
+  <details class="bg-white shadow rounded-2xl">
+    <summary class="select-none cursor-pointer px-4 py-3 text-lg font-semibold">
+      Архив
+    </summary>
+    <div class="p-4 pt-0">
+      <div class="overflow-auto">
+        <table class="min-w-[1100px] w-full text-sm">
+          <thead>
+            <tr class="text-left text-slate-600 border-b">
+              <th class="py-2 pr-3">Описание</th>
+              <th class="py-2 px-3">Начална дата</th>
+              <th class="py-2 px-3">Крайна дата</th>
+              <th class="py-2 px-3">Автобус</th>
+              <th class="py-2 px-3">PAX</th>
+              <th class="py-2 px-3">Статус</th>
+              <th class="py-2 px-3 text-right">Цена (€)</th>
+              <th class="py-2 px-3 text-right">Брутна печалба (€)</th>
+              <th class="py-2 px-3 text-right">% Маржа</th>
+              <th class="py-2 pl-3 pr-1 text-right">Действия</th>
+            </tr>
+          </thead>
+          <tbody id="tbl-archive">
+            {% for o in archived_orders %}
+            {% set unassigned = not o.driver_id %}
+            <tr id="row-order-{{ o.id }}"
+                class="border-b last:border-0 {% if unassigned %}bg-rose-50/40 hover:bg-rose-50{% endif %}"
+                data-title="{{ (o.title or ('Поръчка #' ~ o.id)) | e }}"
+                data-start="{{ o.start_date or '' }}"
+                data-end="{{ o.end_date or o.start_date or '' }}"
+                data-bus="{{ o.bus_plate or '' }}"
+                data-status="{{ o.status or 'Планирана' }}"
+                data-driver="{{ o.driver_name or '' }}">
+              <td class="py-2 pr-3 font-medium">
+                <div class="flex items-center gap-2">
+                  <span>{{ o.title or ("Поръчка #" ~ o.id) }}</span>
+                  {% if o.driver_id %}
+                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200" title="Назначена на {{ o.driver_name or ('шофьор #' ~ o.driver_id) }}">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                      </svg>
+                      Назначена{% if o.driver_name %} · {{ o.driver_name }}{% endif %}
+                    </span>
+                  {% else %}
+                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200" title="Няма зачислен шофьор">
+                      • Без шофьор
+                    </span>
+                  {% endif %}
+                </div>
+              </td>
+              <td class="py-2 px-3 whitespace-nowrap">{{ o.start_date or "" }}</td>
+              <td class="py-2 px-3 whitespace-nowrap">{{ o.end_date or o.start_date or "" }}</td>
+              <td class="py-2 px-3">{{ o.bus_plate or "" }}</td>
+              <td class="py-2 px-3">—</td>
+              <td class="py-2 px-3">{{ o.status or "Планирана" }}</td>
+              <td class="py-2 px-3 text-right">{{ (o.price or "0") }}</td>
+              <td class="py-2 px-3 text-right">{{ "%.2f"|format(o.gross_profit or 0) }}</td>
+              <td class="py-2 px-3 text-right">{{ "%.2f"|format(o.margin_pct or 0) }}%</td>
+              <td class="py-2 pl-3 pr-1">
+                <div class="flex justify-end gap-2">
+                  <!-- Кабинет (панел) -->
+                  <button type="button"
+                          class="p-2 rounded-lg hover:bg-slate-100 js-open-desk"
+                          data-order-id="{{ o.id }}"
+                          title="Кабинет (резюме, файлове, задачи, съобщения)">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" viewBox="0 0 24 24" fill="none" stroke-width="1.8">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M3 7h18M3 12h18M3 17h18"/>
+                    </svg>
+                  </button>
+
+                  <a href="{{ url_for('orders.entry') }}?edit={{ o.id }}" class="p-2 rounded-lg hover:bg-slate-100" title="Редактирай">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487a2.25 2.25 0 113.182 3.182L7.5 20.213 3 21l.787-4.5L16.862 4.487з"/>
+                    </svg>
+                  </a>
+                  <button type="button" class="p-2 rounded-lg hover:bg-red-50 js-del" data-id="{{ o.id }}" title="Изтрий">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="х-5 w-5 stroke-red-600" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V5a2 2 0 012-2h2a 2 2 0 012 2v2m1 0l-.867 12.142A2 2 0 0113.138 21H10.86a2 2 0 01-1.995-1.858L8 7h8"/>
+                    </svg>
+                  </button>
+                </div>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="10" class="py-6 text-center text-slate-500">Няма архивирани поръчки.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </details>
+
+</div>
+
+<!-- ===== Падало с шофьори (един глобален поповър) ===== -->
+<div id="assign-popover" class="hidden fixed z-50 bg-white border rounded-xl shadow-xl w-72">
+  <div class="p-2 border-b flex items-center gap-2">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 stroke-slate-600" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"/>
+    </svg>
+    <input id="assign-filter" placeholder="филтър по име…" class="w-full text-sm outline-none" />
+    <button id="assign-close" class="ml-1 text-slate-500 hover:text-slate-700">&times;</button>
+  </div>
+  <div id="assign-list" class="max-h-72 overflow-auto p-1 text-sm"></div>
+</div>
+
+<!-- ===== КАБИНЕТ (панел) ===== -->
+<div id="desk-overlay" class="hidden fixed inset-0 z-40 bg-black/30"></div>
+<div id="desk-panel" class="hidden fixed right-0 top-0 bottom-0 z-50 w-full max-w-3xl bg-white border-l shadow-2xl flex flex-col">
+  <div class="px-4 py-3 border-b flex items-center justify-between">
+    <div class="font-semibold">Кабинет · <span id="desk-title" class="text-slate-700">—</span></div>
+    <div class="flex items-center gap-2">
+      <a id="desk-open-detail" href="#" class="text-sm px-3 py-1.5 rounded-lg border hover:bg-slate-50" target="_blank" rel="noopener">Отвори детайл</a>
+      <button id="desk-close" class="px-3 py-1.5 rounded-lg border hover:bg-slate-50">Затвори</button>
+    </div>
+  </div>
+
+  <div class="px-4 pt-3">
+    <div class="flex gap-2 text-sm">
+      <button data-tab="summary" class="desk-tab px-3 py-1.5 rounded-lg border bg-slate-900 text-white">Резюме</button>
+      <button data-tab="files"   class="desk-tab px-3 py-1.5 rounded-lg border">Файлове</button>
+      <button data-tab="tasks"   class="desk-tab px-3 py-1.5 rounded-lg border">Задачи</button>
+      <button data-tab="log"     class="desk-tab px-3 py-1.5 rounded-lg border">Съобщения</button>
+    </div>
+  </div>
+
+  <div class="flex-1 overflow-auto p-4">
+    <!-- Summary -->
+    <div id="desk-tab-summary">
+      <div class="mb-3">
+        <a id="btn-print-summary" href="#" target="_blank" rel="noopener" class="inline-flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border hover:bg-slate-50">
+          🖨 Разпечатай резюме
+        </a>
+      </div>
+      <div id="desk-summary" class="text-sm text-slate-700">Зареждане…</div>
+    </div>
+
+    <!-- Files -->
+    <div id="desk-tab-files" class="hidden space-y-3">
+      <form id="desk-upload-form" class="flex items-center gap-2">
+        <input type="file" name="file" class="text-sm" />
+        <button class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm" type="submit">Качи</button>
+      </form>
+      <div id="desk-files" class="text-sm">Няма файлове.</div>
+    </div>
+
+    <!-- Tasks -->
+    <div id="desk-tab-tasks" class="hidden space-y-3">
+      <form id="desk-task-form" class="flex items-center gap-2">
+        <input id="desk-task-input" class="border rounded-lg px-3 py-1.5 text-sm w-full" placeholder="Добави задача…" />
+        <button class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm" type="submit">Добави</button>
+      </form>
+      <ul id="desk-tasks" class="text-sm space-y-1"></ul>
+    </div>
+
+    <!-- Log -->
+    <div id="desk-tab-log" class="hidden">
+      <form id="desk-log-form" class="flex items-center gap-2 mb-3">
+        <input id="desk-log-input" class="border rounded-lg px-3 py-1.5 text-sm w-full" placeholder="Ново съобщение…" />
+        <button class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm" type="submit">Пусни</button>
+      </form>
+      <div id="desk-log" class="text-sm space-y-2"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== JS: търсене/филтър + назначаване + AJAX Delete + Кабинет ===== -->
+<script>
+(function(){
+  const $  = (s, r=document)=>r.querySelector(s);
+  const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
+
+  // ---------- Филтри ----------
+  function normalize(str){ return String(str||"").toLowerCase(); }
+  function inRange(dateStr, fromStr, toStr){
+    if(!dateStr) return true;
+    const d = dateStr;
+    if(fromStr && d < fromStr) return false;
+    if(toStr   && d > toStr)   return false;
+    return true;
+  }
+  function applyFilters(){
+    const q = normalize($('#f-text')?.value);
+    const fFrom = $('#f-from')?.value || '';
+    const fTo   = $('#f-to')?.value   || '';
+    ['#tbl-current','#tbl-archive'].forEach(sel=>{
+      const tbody = $(sel);
+      if(!tbody) return;
+      $$('#' + tbody.id + ' > tr').forEach(tr=>{
+        const title  = normalize(tr.dataset.title);
+        const bus    = normalize(tr.dataset.bus);
+        const status = normalize(tr.dataset.status);
+        const start  = tr.dataset.start || '';
+        const end    = tr.dataset.end   || '';
+        const hitText = !q || title.includes(q) || bus.includes(q) || status.includes(q);
+        const hitDate = inRange(start, fFrom, fTo) || inRange(end, fFrom, fTo);
+        tr.style.display = (hitText && hitDate) ? '' : 'none';
+      });
+    });
+  }
+  $('#btn-apply')?.addEventListener('click', applyFilters);
+  $('#btn-clear')?.addEventListener('click', ()=>{ $('#f-text').value=''; $('#f-from').value=''; $('#f-to').value=''; applyFilters(); });
+  ['f-text','f-from','f-to'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('input', applyFilters);
+    el.addEventListener('change', applyFilters);
+  });
+
+  // ---------- Изтриване ----------
+  async function deleteOrder(id){
+    try{
+      const res = await fetch("{{ url_for('orders.api_delete') }}", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ id })
+      });
+      const j = await res.json();
+      if(!j.ok) throw new Error(j.error || "Грешка при изтриване");
+      const row = document.getElementById('row-order-'+id);
+      if(row) row.remove();
+    }catch(err){ alert(err.message || "Нещо се обърка. Опитайте отново."); }
+  }
+  document.addEventListener("click", (e)=>{
+    const btn = e.target.closest(".js-del");
+    if(!btn) return;
+   
+    if(confirm("Сигурни ли сте, че искате да изтриете поръчка #"+id+"?")){
+      deleteOrder(id);
+    }
+  });
+
+  // ---------- Назначаване към шофьор ----------
+  const DRIVERS = {{ (drivers_all or [])|tojson }};
+  const pop = $('#assign-popover');
+  const popList = $('#assign-list');
+  const popFilter = $('#assign-filter');
+  const popClose = $('#assign-close');
+
+  let ctxOrder = null; // {order_id, start, end}
+
+  function closePop(){ pop.classList.add('hidden'); ctxOrder = null; }
+  popClose.addEventListener('click', closePop);
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closePop(); });
+
+  function placePopNear(el){
+    const r = el.getBoundingClientRect();
+    const px = Math.min(r.left, window.innerWidth - pop.offsetWidth - 10);
+    const py = r.bottom + 6;
+    pop.style.left = px + window.scrollX + 'px';
+    pop.style.top  = py + window.scrollY + 'px';
+  }
+
+  function renderDriverList(filter=''){
+    const f = filter.trim().toLowerCase();
+    popList.innerHTML = '';
+    const list = DRIVERS.filter(d=>{
+      const s = ((d.last_name||'')+' '+(d.first_name||'')).toLowerCase();
+      return !f || s.includes(f);
+    });
+    if(list.length===0){
+      const div = document.createElement('div');
+      div.className = 'p-2 text-slate-500';
+      div.textContent = 'Няма съвпадения.';
+      popList.appendChild(div);
+      return;
+    }
+    list.forEach(d=>{
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 flex items-center justify-between';
+      btn.innerHTML = `
+        <span>${(d.last_name||'')+' '+(d.first_name||'')}</span>
+        <span class="text-xs text-slate-500">#${d.id}</span>
+      `;
+      btn.addEventListener('click', ()=> chooseDriver(d));
+      popList.appendChild(btn);
+    });
+  }
+
+  popFilter.addEventListener('input', ()=> renderDriverList(popFilter.value));
+
+  document.addEventListener('click', (e)=>{
+    const trigger = e.target.closest('.js-assign-driver');
+    if(!trigger) return;
+    if (trigger.classList.contains('pointer-events-none')) return; // вече назначена
+
+    ctxOrder = {
+      order_id: trigger.getAttribute('data-order-id'),
+      start: trigger.getAttribute('data-start') || '',
+      end: trigger.getAttribute('data-end') || ''
+    };
+    placePopNear(trigger);
+    pop.classList.remove('hidden');
+    popFilter.value = '';
+    renderDriverList('');
+    popFilter.focus();
+  });
+
+  // ---------- Предупреждение за конфликт ----------
+  const banner = $('#conflict-banner');
+  const bannerText = $('#conflict-text');
+  const btnCancel = $('#conflict-cancel');
+  const btnForce  = $('#conflict-assign-anyway');
+
+  let pendingAssign = null; // {driver, order}
+
+  btnCancel.addEventListener('click', ()=>{
+    pendingAssign = null;
+    banner.classList.add('hidden');
+  });
+  btnForce.addEventListener('click', ()=>{
+    if(!pendingAssign) { banner.classList.add('hidden'); return; }
+    doAssign(pendingAssign.driver.id, pendingAssign.order.order_id);
+    pendingAssign = null;
+    banner.classList.add('hidden');
+  });
+
+  async function chooseDriver(driver){
+    if(!ctxOrder) return;
+
+    try{
+      const res = await fetch("{{ url_for('drivers.api_check_conflict') }}", {
+        method: "POST",
+        headers: { "Content-Type":"application/json", "Accept":"application/json" },
+        body: JSON.stringify({
+          driver_id: Number(driver.id),
+          start_date: ctxOrder.start || '',
+          end_date:   ctxOrder.end || ctxOrder.start || '',
+          ignore_order_id: Number(ctxOrder.order_id || 0) || null
+        })
+      });
+
+      if(!res.ok){
+        const t = await res.text();
+        throw new Error(`HTTP ${res.status} – ${t.slice(0,120)}`);
+      }
+      const j = await res.json(); // { ok, conflict, overlaps }
+      if(j && j.ok && j.conflict){
+        const list = (j.overlaps||[]).map(c => `#${c.id} (${c.start_date} → ${c.end_date})`).join(", ");
+        bannerText.textContent = `Назначението застъпва ${j.overlaps.length} поръчки: ${list}`;
+        banner.classList.remove('hidden');
+        pendingAssign = { driver, order: ctxOrder };
+        closePop();
+        return;
+      }
+
+      await doAssign(driver.id, ctxOrder.order_id);
+      closePop();
+    }catch(err){
+      alert('Грешка при проверка: ' + (err.message||''));
+    }
+  }
+
+  async function doAssign(driver_id, order_id){
+    const form = new FormData();
+    form.append('order_id', order_id);
+    try{
+      const res = await fetch(`/drivers/${driver_id}/assign`, { method:'POST', body: form });
+      if(!res.ok){
+        const t = await res.text();
+        throw new Error(t || 'HTTP ' + res.status);
+      }
+      location.reload();
+    }catch(err){
+      alert('Неуспешно назначаване: ' + (err.message||''));
+    }
+  }
+
+  // ---------- КАБИНЕТ ----------
+  const overlay = $('#desk-overlay');
+  const panel   = $('#desk-panel');
+  const titleEl = $('#desk-title');
+  const btnClose= $('#desk-close');
+  const btnsTab = $$('.desk-tab');
+  const tabSummary = $('#desk-tab-summary');
+  const tabFiles   = $('#desk-tab-files');
+  const tabTasks   = $('#desk-tab-tasks');
+  const tabLog     = $('#desk-tab-log');
+
+  const summaryBox = $('#desk-summary');
+  const filesBox   = $('#desk-files');
+  const tasksBox   = $('#desk-tasks');
+  const logBox     = $('#desk-log');
+  const uploadForm = $('#desk-upload-form');
+  const taskForm   = $('#desk-task-form');
+  const taskInput  = $('#desk-task-input');
+  const logForm    = $('#desk-log-form');
+  const logInput   = $('#desk-log-input');
+  const openDetail = $('#desk-open-detail');
+  const btnPrint   = $('#btn-print-summary');
+
+  let currentOrderId = null;
+
+  function showPanel(){ overlay.classList.remove('hidden'); panel.classList.remove('hidden'); }
+  function hidePanel(){ overlay.classList.add('hidden'); panel.classList.add('hidden'); currentOrderId = null; }
+  btnClose.addEventListener('click', hidePanel);
+  overlay.addEventListener('click', hidePanel);
+
+  // tabs
+  btnsTab.forEach(b=>{
+    b.addEventListener('click', ()=>{
+      btnsTab.forEach(x=> x.classList.remove('bg-slate-900','text-white'));
+      b.classList.add('bg-slate-900','text-white');
+
+      const t = b.getAttribute('data-tab');
+      tabSummary.classList.toggle('hidden', t!=='summary');
+      tabFiles.classList.toggle('hidden',   t!=='files');
+      tabTasks.classList.toggle('hidden',   t!=='tasks');
+      tabLog.classList.toggle('hidden',     t!=='log');
+    });
+  });
+
+  async function fetchJSON(url, opts){
+    const res = await fetch(url, opts||{});
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  }
+
+  function num2(v){ try{ return Number(v).toFixed(2); }catch{ return '0.00'; } }
+
+  function renderSummary(snap){
+    const s = snap.summary || {};
+    const cost = s.costs_breakdown || {};
+    const pax = (s.pax==null || s.pax==='') ? '—' : s.pax;
+
+    summaryBox.innerHTML = `
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="border rounded-xl p-3">
+          <div class="text-xs text-slate-500 mb-1">Основна информация</div>
+          <div class="space-y-1">
+            <div><span class="text-slate-500">Описание:</span> <span class="font-medium">${s.title || ('Поръчка #'+currentOrderId)}</span></div>
+            <div><span class="text-slate-500">Период:</span> ${s.start_date||'—'} → ${s.end_date||s.start_date||'—'} (${(s.work_plan?.days ?? '—')} дни)</div>
+            <div><span class="text-slate-500">Автобус:</span> ${s.bus_plate||'—'}</div>
+            <div><span class="text-slate-500">PAX:</span> ${pax}</div>
+            <div><span class="text-slate-500">Статус:</span> ${s.status||'Планирана'}</div>
+            <div><span class="text-slate-500">Шофьор:</span> ${s.driver_assigned ? ('Да · ' + (s.driver_name||'')) : 'Не'}</div>
+            <div><span class="text-slate-500">Двупосочно:</span> ${s.round_trip ? 'Да' : 'Не'}</div>
+            <div><span class="text-slate-500">Бюджет 1:</span> ${s.budget1_tag_date || '—'}</div>
+            <div><span class="text-slate-500">Бюджет 2:</span> ${s.budget2_tag_date || '—'}</div>
+          </div>
+        </div>
+
+        <div class="border rounded-xl p-3">
+          <div class="text-xs text-slate-500 mb-1">Финанси</div>
+          <table class="w-full text-sm">
+            <tr><td class="text-slate-500">Цена (приход)</td><td class="text-right font-mono">${num2(s.price)} €</td></tr>
+            <tr><td class="text-slate-500">Директни разходи</td><td class="text-right font-mono">${num2(s.direct_costs)} €</td></tr>
+            <tr><td class="text-slate-500">Брутна печалба</td><td class="text-right font-mono">${num2(s.gross_profit)} €</td></tr>
+            <tr><td class="text-slate-500">% Марж</td><td class="text-right font-mono">${num2(s.margin_pct)} %</td></tr>
+          </table>
+          <div class="text-xs text-slate-500 mt-2">
+            Разбивка: гориво ${num2(cost.fuel_sum||0)} €, пътни ${num2(cost.toll_firm||0)} €, други ${num2(cost.extras_firm||0)} €, персонал ${num2(cost.personnel_total||0)} €.
+          </div>
+        </div>
+
+        <div class="border rounded-xl p-3 md:col-span-2">
+          <div class="text-xs text-slate-500 mb-1">Планирано работно време</div>
+          <div class="grid sm:grid-cols-3 gap-2">
+            <div><span class="text-slate-500">Режим:</span> ${s.work_plan?.mode || 'daily'}</div>
+            <div><span class="text-slate-500">Дни:</span> ${s.work_plan?.days ?? '—'}</div>
+            <div><span class="text-slate-500">Часове/ден:</span> ${s.work_plan?.hours_per_day ?? '—'}</div>
+            <div><span class="text-slate-500">Часове общо:</span> ${s.work_plan?.planned_hours_total ?? '—'}</div>
+            <div><span class="text-slate-500">Втори шофьор:</span> ${s.work_plan?.second_driver ? 'Да' : 'Не'}</div>
+            <div><span class="text-slate-500">Дни втори шофьор:</span> ${s.work_plan?.second_driver_days || '—'}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderFiles(snap){
+    const arr = snap.files || [];
+    if(!arr.length){ filesBox.textContent = 'Няма файлове.'; return; }
+    filesBox.innerHTML = arr.map(f => `
+      <div class="flex items-center justify-between border rounded-lg px-3 py-2">
+        <div class="truncate">
+          <div class="font-medium truncate">${f.name||'file'}</div>
+          <div class="text-xs text-slate-500">${(f.size||0)} B · ${(f.uploaded_at||'')}</div>
+        </div>
+        ${f.url ? `<a href="${f.url}" target="_blank" rel="noopener" class="text-xs px-2 py-1 rounded border hover:bg-slate-50">Отвори</a>` : ``}
+      </div>
+    `).join('');
+  }
+
+  function renderTasks(snap){
+    const arr = snap.tasks || [];
+    if(!arr.length){ tasksBox.innerHTML = `<li class="text-slate-500">Няма задачи.</li>`; return; }
+    tasksBox.innerHTML = arr.map(t => `
+      <li class="flex items-center justify-between border rounded-lg px-3 py-2">
+        <label class="inline-flex items-center gap-2">
+          <input type="checkbox" class="desk-task-toggle" data-task-id="${t.id}" ${t.done?'checked':''}/>
+          <span class="${t.done?'line-through text-slate-400':''}">${t.text||t.title||''}</span>
+        </label>
+        <span class="text-xs text-slate-500">${t.created_at||t.ts||''}</span>
+      </li>
+    `).join('');
+  }
+
+  function renderLog(snap){
+    const arr = snap.log || [];
+    if(!arr.length){ logBox.innerHTML = `<div class="text-slate-500">Няма записи.</div>`; return; }
+    logBox.innerHTML = arr.map(m => `
+      <div class="border rounded-lg px-3 py-2">
+        <div class="text-xs text-slate-500">${m.when||''} · ${m.author||'система'}</div>
+        <div>${(m.text||'')}</div>
+      </div>
+    `).join('');
+  }
+
+  async function loadSnapshot(orderId){
+    const snap = await fetchJSON(`/orders/api/cabinet/snapshot?id=${encodeURIComponent(orderId)}`);
+    renderSummary(snap);
+    renderFiles(snap);
+    renderTasks(snap);
+    renderLog(snap);
+    // Линк за печат
+    btnPrint.href = `/orders/api/cabinet/summary_html?id=${encodeURIComponent(orderId)}`;
+  }
+
+  // Откриване на панела
+  document.addEventListener('click', (e)=>{
+    const btn = e.target.closest('.js-open-desk');
+    if(!btn) return;
+    const tr = btn.closest('tr');
+    currentOrderId = btn.getAttribute('data-order-id');
+    const title = tr?.dataset?.title || ('Поръчка #'+currentOrderId);
+    titleEl.textContent = title;
+    openDetail.href = `/orders/${encodeURIComponent(currentOrderId)}`;
+    showPanel();
+    // reset UI
+    summaryBox.textContent = 'Зареждане…';
+    filesBox.textContent   = 'Зареждане…';
+    tasksBox.innerHTML     = `<li>Зареждане…</li>`;
+    logBox.textContent     = 'Зареждане…';
+    loadSnapshot(currentOrderId).catch(()=> {
+      summaryBox.innerHTML = `<div class="text-slate-600">Неуспешно зареждане на резюме.</div>`;
+    });
+  });
+
+  // Upload файл
+  uploadForm?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    if(!currentOrderId) return;
+    const fd = new FormData(uploadForm);
+    fd.append('id', currentOrderId); // важно: за API-то
+    try{
+      const res = await fetch(`/orders/api/files/upload`, { method:'POST', body: fd });
+      const j = await res.json();
+      if(!j.ok) throw new Error('upload failed');
+      await loadSnapshot(currentOrderId);
+      uploadForm.reset();
+    }catch(err){
+      alert('Качването се провали.');
+    }
+  });
+
+  // Добавяне на задача
+  taskForm?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    if(!currentOrderId) return;
+    const text = (taskInput.value||'').trim();
+    if(!text) return;
+    try{
+      const res = await fetch(`/orders/api/tasks/add`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ id: Number(currentOrderId), text })
+      });
+      const j = await res.json();
+      if(!j.ok) throw new Error('add failed');
+      taskInput.value='';
+      await loadSnapshot(currentOrderId);
+    }catch(err){
+      alert('Добавяне на задача се провали.');
+    }
+  });
+
+  // Toggle задача
+  document.addEventListener('change', async (e)=>{
+    const cb = e.target.closest('.desk-task-toggle');
+    if(!cb || !currentOrderId) return;
+    const tid = Number(cb.getAttribute('data-task-id'));
+    try{
+      const res = await fetch(`/orders/api/tasks/toggle`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ id: Number(currentOrderId), task_id: tid })
+      });
+      const j = await res.json();
+      if(!j.ok) throw new Error('toggle failed');
+      await loadSnapshot(currentOrderId);
+    }catch(err){
+      alert('Обновяването на задача се провали.');
+    }
+  });
+
+  // Пускане на съобщение (лог)
+  logForm?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    if(!currentOrderId) return;
+    const text = (logInput.value||'').trim();
+    if(!text) return;
+    try{
+      const res = await fetch(`/orders/api/messages/add`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ id: Number(currentOrderId), text })
+      });
+      const j = await res.json();
+      if(!j.ok) throw new Error('log failed');
+      logInput.value='';
+      await loadSnapshot(currentOrderId);
+    }catch(err){
+      alert('Публикуването се провали.');
+    }
+  });
+
+  // Първоначално – филтър
+  applyFilters();
+
+  // Клик извън поповъра → затваря
+  const pop = $('#assign-popover');
+  document.addEventListener('click', (e)=>{
+    if(pop.classList.contains('hidden')) return;
+    if(e.target.closest('#assign-popover') || e.target.closest('.js-assign-driver')) return;
+    pop.classList.add('hidden');
+  });
+})();
+</script>
+
+{% endblock %}

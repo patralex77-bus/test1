@@ -1,0 +1,79 @@
+{% extends "drivers/base_driver.html" %}
+{% set active_page = 'fahrer' %}
+{% block title %}Профил на шофьора{% endblock %}
+
+{% block content %}
+
+<h1 class="text-xl font-semibold mb-4">Профил</h1>
+
+<div class="bg-white shadow rounded-2xl p-4 space-y-4 text-sm">
+
+  <div>
+    <div class="text-xs text-slate-500 mb-1">Име</div>
+    <div class="font-medium">
+      {{ current_driver.last_name }} {{ current_driver.first_name }}
+    </div>
+  </div>
+
+  {% if current_driver.phone %}
+    <div>
+      <div class="text-xs text-slate-500 mb-1">Телефон</div>
+      <div class="font-medium">
+        {{ current_driver.phone }}
+      </div>
+    </div>
+  {% endif %}
+
+  {% if current_driver.email %}
+    <div>
+      <div class="text-xs text-slate-500 mb-1">Email</div>
+      <div class="font-medium">
+        {{ current_driver.email }}
+      </div>
+    </div>
+  {% endif %}
+
+  {% if current_driver.docs %}
+    <div class="border-t pt-3 mt-2">
+      <div class="text-xs text-slate-500 mb-2">Документи</div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+        {% if current_driver.docs.license_valid_until %}
+          <div>
+            <div class="text-slate-500">Шофьорска книжка до</div>
+            <div class="font-medium">
+              {{ current_driver.docs.license_valid_until }}
+            </div>
+          </div>
+        {% endif %}
+        {% if current_driver.docs.card_valid_until %}
+          <div>
+            <div class="text-slate-500">Карта на водача до</div>
+            <div class="font-medium">
+              {{ current_driver.docs.card_valid_until }}
+            </div>
+          </div>
+        {% endif %}
+        {% if current_driver.docs.passport_valid_until %}
+          <div>
+            <div class="text-slate-500">Паспорт до</div>
+            <div class="font-medium">
+              {{ current_driver.docs.passport_valid_until }}
+            </div>
+          </div>
+        {% endif %}
+        {% if current_driver.docs.med_check_valid_until %}
+          <div>
+            <div class="text-slate-500">Медицински преглед до</div>
+            <div class="font-medium">
+              {{ current_driver.docs.med_check_valid_until }}
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+  {# по-късно тук може да добавим: смяна на PIN, език, т.н. #}
+</div>
+
+{% endblock %}

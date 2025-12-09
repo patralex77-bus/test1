@@ -1,0 +1,13 @@
+{
+  "events": [
+    {
+      "ts": "2025-10-08T15:55:38Z",
+      "type": "assign_driver",
+      "author": "system",
+      "payload": {
+        "driver_id": 1,
+        "driver_name": "Alexander Patrachkov"
+      }
+    }
+  ]
+}

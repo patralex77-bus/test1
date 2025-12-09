@@ -1,0 +1,17 @@
+{
+  "drivers": [
+    {
+      "id": 1,
+      "first_name": "Alexander",
+      "last_name": "Patrachkov",
+      "notes": "",
+      "docs": {
+        "license_valid_until": "2027-01-01",
+        "card_valid_until": "",
+        "passport_valid_until": "",
+        "med_check_valid_until": ""
+      }
+    }
+  ],
+  "next_id": 2
+}

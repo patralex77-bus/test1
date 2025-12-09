@@ -1,0 +1,113 @@
+{% extends "drivers/base_driver.html" %}
+{% set active_page = 'orders' %}
+
+{% block title %}Поръчка №{{ order.id }}{% endblock %}
+
+{% block content %}
+
+{# Очаква се: order, log_required, log_submitted, log_token, documents (по желание) #}
+
+<h1 class="text-lg font-semibold mb-3">
+  Поръчка №{{ order.id }}
+</h1>
+
+<div class="bg-white rounded-2xl shadow p-4 mb-4">
+  <div class="flex items-center justify-between mb-1">
+    <div class="font-semibold">
+      {{ order.date.strftime("%d.%m.%Y") }}
+    </div>
+    <span class="text-xs text-slate-500">
+      {{ order.start_time }} – {{ order.end_time }}
+    </span>
+  </div>
+
+  <div class="text-sm text-slate-700 mt-1">
+    <div class="font-medium">
+      {{ order.start_location }} → {{ order.end_location }}
+    </div>
+    {% if order.customer_name %}
+      <div class="mt-1">
+        Клиент: <span class="font-medium">{{ order.customer_name }}</span>
+      </div>
+    {% endif %}
+    {% if order.customer_phone %}
+      <div class="mt-1">
+        Тел. клиент:
+        <a href="tel:{{ order.customer_phone }}" class="text-blue-600 underline">
+          {{ order.customer_phone }}
+        </a>
+      </div>
+    {% endif %}
+  </div>
+
+  {% if order.notes %}
+    <div class="mt-3 text-sm text-slate-700">
+      <div class="font-semibold mb-1">Забележки от офиса:</div>
+      <p class="whitespace-pre-line">{{ order.notes }}</p>
+    </div>
+  {% endif %}
+</div>
+
+{# Бързи действия #}
+<div class="grid grid-cols-2 gap-3 mb-4">
+  {% if order.start_location_map_url %}
+    <a href="{{ order.start_location_map_url }}"
+       class="inline-flex items-center justify-center bg-blue-600 text-white text-sm rounded-xl py-2">
+      Навигация
+    </a>
+  {% endif %}
+  {% if order.dispatch_phone %}
+    <a href="tel:{{ order.dispatch_phone }}"
+       class="inline-flex items-center justify-center bg-slate-800 text-white text-sm rounded-xl py-2">
+      Обади се на диспечер
+    </a>
+  {% endif %}
+</div>
+
+{# Статус и отчет #}
+<div class="bg-white rounded-2xl shadow p-4 mb-4">
+  <div class="flex items-center justify-between mb-2">
+    <div class="font-semibold text-sm">Отчет по поръчката</div>
+  </div>
+
+  {% if log_required %}
+    {% if log_submitted %}
+      <div class="text-sm text-emerald-700 mb-2">
+        ✅ Отчетът е подаден.
+      </div>
+    {% else %}
+      <div class="text-sm text-red-600 mb-2">
+        ⚠ Тази поръчка изисква отчет, който още не е подаден.
+      </div>
+      {% if log_token %}
+        <a href="{{ url_for('driver_portal.log_form', token=log_token) }}"
+           class="inline-flex items-center justify-center bg-blue-600 text-white text-sm rounded-xl px-4 py-2">
+          Попълни отчет
+        </a>
+      {% endif %}
+    {% endif %}
+  {% else %}
+    <div class="text-sm text-slate-600">
+      За тази поръчка не се изисква отделен отчет.
+    </div>
+  {% endif %}
+</div>
+
+{# Прикачени документи #}
+{% if documents %}
+  <div class="bg-white rounded-2xl shadow p-4 mb-4">
+    <div class="font-semibold text-sm mb-2">Документи към поръчката</div>
+    <ul class="text-sm space-y-1">
+      {% for doc in documents %}
+        <li>
+          <a href="{{ doc.url }}" target="_blank"
+             class="text-blue-600 underline">
+            {{ doc.title or ('Документ ' ~ loop.index) }}
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+{% endblock %}

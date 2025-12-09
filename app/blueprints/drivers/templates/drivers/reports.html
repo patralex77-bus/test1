@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Шофьори · Отчети{% endblock %}
+{% block content %}
+
+<h1 class="text-xl font-semibold mb-4">Шофьори — Отчети</h1>
+
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+  {# ===== ДЯСНА КОЛОНА: избор на шофьор и период ===== #}
+  <aside class="lg:col-span-3">
+    <div class="bg-white shadow rounded-2xl p-4 space-y-4">
+      <h2 class="text-sm font-semibold mb-1">Филтър</h2>
+
+      <form method="get" class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">
+            Шофьор
+          </label>
+          <select name="driver_id"
+                  class="w-full border rounded-lg px-3 py-2 text-sm">
+            {% for d in drivers %}
+              <option value="{{ d.id }}"
+                      {% if d.id == selected_driver_id %}selected{% endif %}>
+                {{ d.last_name }} {{ d.first_name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">
+            Месец
+          </label>
+          <input type="month"
+                 name="month"
+                 class="w-full border rounded-lg px-3 py-2 text-sm"
+                 value="{{ month_value }}">
+        </div>
+
+        <div class="flex items-center justify-between gap-2 pt-1">
+          <div class="flex gap-1">
+            <a href="{{ url_for('drivers.reports', driver_id=selected_driver_id, month=prev_month_value) }}"
+               class="px-2 py-1.5 border rounded-lg text-xs hover:bg-slate-50">
+              ‹ Преден
+            </a>
+            <a href="{{ url_for('drivers.reports', driver_id=selected_driver_id, month=next_month_value) }}"
+               class="px-2 py-1.5 border rounded-lg text-xs hover:bg-slate-50">
+              Следващ ›
+            </a>
+          </div>
+          <button class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs hover:bg-blue-700">
+            Покази
+          </button>
+        </div>
+      </form>
+
+      {% if selected_driver %}
+        <div class="border-t pt-3 mt-2 text-xs text-slate-600 space-y-1">
+          <div>
+            <span class="font-semibold">Избран шофьор:</span><br>
+            {{ selected_driver.last_name }} {{ selected_driver.first_name }}
+          </div>
+          {% if totals %}
+            <div class="pt-1">
+              <div>Месец: <strong>{{ month_label }}</strong></div>
+              <div class="mt-1">
+                Общо часове: <strong>{{ "%.2f"|format(totals.hours) }}</strong><br>
+                Общо км: <strong>{{ "%.0f"|format(totals.km) }}</strong><br>
+                Общо разходи: <strong>{{ "%.2f"|format(totals.costs) }} €</strong>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+  </aside>
+
+  {# ===== ЛЯВА ЧАСТ: статистики ===== #}
+  <section class="lg:col-span-9 space-y-4">
+
+    {% if not selected_driver %}
+      <div class="bg-white shadow rounded-2xl p-4 text-sm text-slate-600">
+        Няма въведени шофьори.
+      </div>
+    {% else %}
+
+      {# --- Обобщение за месеца --- #}
+      <div class="bg-white shadow rounded-2xl p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold">
+            Обобщение за {{ month_label }}
+          </h2>
+          <div class="text-xs text-slate-500">
+            Данните са от дневниците и телеметрията.
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div class="border rounded-2xl p-3">
+            <div class="text-xs text-slate-500">Работно време (месец)</div>
+            <div class="text-2xl font-semibold mt-1">
+              {{ "%.2f"|format(totals.hours) }} ч
+            </div>
+          </div>
+          <div class="border rounded-2xl p-3">
+            <div class="text-xs text-slate-500">Изминати километри (месец)</div>
+            <div class="text-2xl font-semibold mt-1">
+              {{ "%.0f"|format(totals.km) }} км
+            </div>
+          </div>
+          <div class="border rounded-2xl p-3">
+            <div class="text-xs text-slate-500">Общи разходи (месец)</div>
+            <div class="text-2xl font-semibold mt-1">
+              {{ "%.2f"|format(totals.costs) }} €
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# --- Седмичен разрез --- #}
+      <div class="bg-white shadow rounded-2xl p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold">Седмичен разрез (в рамките на месеца)</h2>
+          <div class="text-xs text-slate-500">
+            Всяка седмица показва дните от месеца, които попадат в нея.
+          </div>
+        </div>
+
+        {% if stats_week %}
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="border-b bg-slate-50">
+                  <th class="text-left px-2 py-1.5">Седмица</th>
+                  <th class="text-right px-2 py-1.5">Часове</th>
+                  <th class="text-right px-2 py-1.5">Километри</th>
+                  <th class="text-right px-2 py-1.5">Разходи (€)</th>
+                  <th class="text-left px-2 py-1.5">Диапазон</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for w in stats_week %}
+                  <tr class="border-b last:border-b-0">
+                    <td class="px-2 py-1.5">Седмица {{ w.week_in_month }}</td>
+                    <td class="px-2 py-1.5 text-right">{{ "%.2f"|format(w.hours) }}</td>
+                    <td class="px-2 py-1.5 text-right">{{ "%.0f"|format(w.km) }}</td>
+                    <td class="px-2 py-1.5 text-right">{{ "%.2f"|format(w.costs) }}</td>
+                    <td class="px-2 py-1.5 text-xs text-slate-500">
+                      {{ w.range_start }} → {{ w.range_end }}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="text-sm text-slate-500">
+            Няма данни за този месец.
+          </div>
+        {% endif %}
+      </div>
+
+      {# --- Дневен разрез --- #}
+      <div class="bg-white shadow rounded-2xl p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold">Дневен разрез</h2>
+          <div class="text-xs text-slate-500">
+            По дни: работно време, разходи, километри и използвани автобуси.
+          </div>
+        </div>
+
+        {% if stats_day %}
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="border-b bg-slate-50">
+                  <th class="text-left px-2 py-1.5">Дата</th>
+                  <th class="text-left px-2 py-1.5">Седмица</th>
+                  <th class="text-right px-2 py-1.5">Часове</th>
+                  <th class="text-right px-2 py-1.5">Километри</th>
+                  <th class="text-right px-2 py-1.5">Разходи (€)</th>
+                  <th class="text-left px-2 py-1.5">Автобуси</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for d in stats_day %}
+                  <tr class="border-b last:border-b-0">
+                    <td class="px-2 py-1.5 whitespace-nowrap">
+                      {{ d.date_human }}
+                    </td>
+                    <td class="px-2 py-1.5 text-xs text-slate-500">
+                      Седмица {{ d.week_in_month }}
+                    </td>
+                    <td class="px-2 py-1.5 text-right">
+                      {{ "%.2f"|format(d.hours) }}
+                    </td>
+                    <td class="px-2 py-1.5 text-right">
+                      {{ "%.0f"|format(d.km) }}
+                    </td>
+                    <td class="px-2 py-1.5 text-right">
+                      {{ "%.2f"|format(d.costs) }}
+                    </td>
+                    <td class="px-2 py-1.5">
+                      {% if d.buses %}
+                        <div class="flex flex-wrap gap-1">
+                          {% for b in d.buses %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] bg-slate-50">
+                              {{ b }}
+                            </span>
+                          {% endfor %}
+                        </div>
+                      {% else %}
+                        <span class="text-xs text-slate-400">Няма данни</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="text-sm text-slate-500">
+            Няма дневни данни за този месец.
+          </div>
+        {% endif %}
+      </div>
+
+    {% endif %}
+  </section>
+</div>
+
+{% endblock %}

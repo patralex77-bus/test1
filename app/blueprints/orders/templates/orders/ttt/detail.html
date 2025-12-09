@@ -1,0 +1,460 @@
+{% extends "base.html" %}
+{% block title %}Поръчка · {{ order_title }}{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-xl font-semibold">Поръчка: {{ order_title }}</h1>
+  <div class="flex gap-2">
+    <a href="{{ url_for('orders.list') }}" class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm">← Към списъка</a>
+    <a href="{{ url_for('orders.entry') }}?edit={{ order_id }}" class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm">Редакция</a>
+    <a id="btn-print-top" target="_blank" class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm">🖨 Разпечатай резюме</a>
+  </div>
+</div>
+
+<div id="warn" class="hidden mb-3 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 px-3 py-2 text-sm">
+  Зареждам богатото резюме… Ако виждаш само базови полета, бекендът не връща <code>summary</code> (временно ще паднем към стария формат).
+</div>
+
+<div class="bg-white rounded-2xl shadow border">
+  <div class="flex items-center gap-2 px-3 py-2 border-b">
+    <button data-tab="overview" class="px-3 py-1.5 text-sm rounded tab-btn bg-slate-900 text-white">Общо</button>
+    <button data-tab="cabinet" class="px-3 py-1.5 text-sm rounded tab-btn border">Кабинет</button>
+  </div>
+
+  <!-- =========== OVERVIEW =========== -->
+  <div id="tab-overview" class="p-4">
+    <div class="flex items-center justify-between mb-3">
+      <div class="text-sm text-slate-600">Резюме</div>
+      <a id="btn-print-overview" target="_blank" class="px-3 py-1.5 text-xs rounded-lg border hover:bg-slate-50">🖨 Разпечатай резюме</a>
+    </div>
+
+    <div class="grid lg:grid-cols-3 gap-4">
+      <!-- Лява колона: основни данни -->
+      <div class="lg:col-span-1 bg-white rounded-xl border p-4">
+        <div class="text-sm space-y-1">
+          <div><span class="text-slate-500">ID:</span> <span class="font-medium">{{ order_id }}</span></div>
+          <div><span class="text-slate-500">Описание:</span> <span id="ov-title" class="font-medium">—</span></div>
+          <div><span class="text-slate-500">Период:</span> <span id="ov-range">—</span></div>
+          <div><span class="text-slate-500">Автобус:</span> <span id="ov-plate">—</span></div>
+          <div><span class="text-slate-500">Шофьор:</span> <span id="ov-driver">—</span></div>
+          <div><span class="text-slate-500">PAX:</span> <span id="ov-pax">—</span></div>
+          <div><span class="text-slate-500">Статус:</span> <span id="ov-status" class="inline-block px-2 py-0.5 rounded text-xs bg-slate-100">—</span></div>
+          <div><span class="text-slate-500">Бюджет 1:</span> <span id="ov-b1">—</span></div>
+          <div><span class="text-slate-500">Бюджет 2:</span> <span id="ov-b2">—</span></div>
+          <div><span class="text-slate-500">Двупосочно:</span> <span id="ov-rt">—</span></div>
+        </div>
+      </div>
+
+      <!-- Средна колона: финанси -->
+      <div class="lg:col-span-1 bg-white rounded-xl border p-4">
+        <div class="text-sm text-slate-600 mb-2">Финанси</div>
+        <div class="grid grid-cols-2 gap-2 text-sm">
+          <div class="p-3 border rounded-xl">
+            <div class="text-slate-500">Цена</div>
+            <div id="ov-price" class="font-semibold">—</div>
+          </div>
+          <div class="p-3 border rounded-xl">
+            <div class="text-slate-500">Директни разходи</div>
+            <div id="ov-direct" class="font-semibold">—</div>
+          </div>
+          <div class="p-3 border rounded-xl">
+            <div class="text-slate-500">Брутна печалба</div>
+            <div id="ov-gross" class="font-semibold">—</div>
+          </div>
+          <div class="p-3 border rounded-xl">
+            <div class="text-slate-500">% Марж</div>
+            <div id="ov-margin" class="font-semibold">—</div>
+          </div>
+        </div>
+        <div class="mt-3 text-xs text-slate-600" id="ov-costs-breakdown">—</div>
+      </div>
+
+      <!-- Дясна колона: работно време -->
+      <div class="lg:col-span-1 bg-white rounded-xl border p-4">
+        <div class="text-sm text-slate-600 mb-2">Планирано работно време</div>
+        <div class="grid grid-cols-2 gap-2 text-sm">
+          <div class="p-2 border rounded"><span class="text-slate-500">Режим:</span> <span id="ov-w-mode">—</span></div>
+          <div class="p-2 border rounded"><span class="text-slate-500">Дни:</span> <span id="ov-w-days">—</span></div>
+          <div class="p-2 border rounded"><span class="text-slate-500">Часове/ден:</span> <span id="ov-w-hpd">—</span></div>
+          <div class="p-2 border rounded"><span class="text-slate-500">Часове общо:</span> <span id="ov-w-ht">—</span></div>
+          <div class="p-2 border rounded"><span class="text-slate-500">Втори шофьор:</span> <span id="ov-w-2nd">—</span></div>
+          <div class="p-2 border rounded"><span class="text-slate-500">Дни втори шофьор:</span> <span id="ov-w-2nddays">—</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========== CABINET =========== -->
+  <div id="tab-cabinet" class="p-4 hidden">
+    <div class="grid lg:grid-cols-3 gap-4">
+      <!-- Инфо + Зачисляване + Качване на файл -->
+      <div class="space-y-4">
+        <div class="bg-white rounded-xl border p-4">
+          <div class="flex items-center justify-between">
+            <div class="text-sm font-semibold">Информация за поръчка</div>
+            <a id="btn-print-cab" target="_blank" class="px-2 py-1 text-xs rounded-lg border hover:bg-slate-50">🖨 Разпечатай</a>
+          </div>
+          <div class="text-sm mt-2 space-y-1">
+            <div class="font-medium" id="cb-title">—</div>
+            <div class="text-slate-600">Диапазон: <span id="cb-range">—</span></div>
+            <div class="text-slate-600">Автобус: <span id="cb-plate">—</span></div>
+            <div class="text-slate-600">Шофьор: <span id="cb-driver">—</span></div>
+          </div>
+          <div class="mt-3">
+            <label class="block text-xs text-slate-500 mb-1">Зачисли към шофьор</label>
+            <div class="flex gap-2">
+              <select id="cb-driver-select" class="border rounded-lg px-2 py-1 text-sm flex-1"></select>
+              <button id="cb-assign-btn" class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm">Зачисли</button>
+            </div>
+            <div class="text-xs text-slate-500 mt-1">Списъкът идва от <code>/drivers/api/list</code>.</div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border p-4">
+          <div class="text-sm font-semibold mb-2">Файлове (качване)</div>
+          <form id="cb-upload-form" class="space-y-2">
+            <input type="hidden" name="id" value="{{ order_id }}">
+            <input type="file" name="file" class="text-sm" />
+            <button type="submit" class="px-3 py-1.5 text-sm rounded-lg border hover:bg-slate-50">Качи</button>
+          </form>
+          <div class="text-xs text-slate-500 mt-2">Файловете се записват в <code>data/order_files/{{ order_id }}/</code>.</div>
+        </div>
+      </div>
+
+      <!-- Задачи + Бележка -->
+      <div class="space-y-4">
+        <div class="bg-white rounded-xl border p-4">
+          <div class="text-sm font-semibold mb-2">Задачи</div>
+          <form id="cb-task-form" class="flex gap-2 mb-3">
+            <input type="text" id="cb-task-text" class="border rounded-lg px-2 py-1 text-sm flex-1" placeholder="Нова задача…">
+            <button type="submit" class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm">Добави</button>
+          </form>
+          <ul id="cb-task-list" class="space-y-2 text-sm"></ul>
+          <div id="tasks-backend-note" class="hidden mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+            Няма връзка към бекенда за задачи.
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border p-4">
+          <div class="text-sm font-semibold mb-2">Съобщение (лог)</div>
+          <form id="cb-msg-form" class="space-y-2">
+            <input type="text" id="cb-msg-author" class="border rounded-lg px-2 py-1 text-sm w-full" placeholder="Автор (по избор)">
+            <textarea id="cb-msg-body" class="border rounded-lg px-2 py-1 text-sm w-full h-28" placeholder="Бележка/съобщение…"></textarea>
+            <button type="submit" class="px-3 py-1.5 rounded-lg border hover:bg-slate-50 text-sm">Запиши</button>
+          </form>
+          <div class="text-xs text-slate-500 mt-1">MVP: записва се само в лога.</div>
+        </div>
+      </div>
+
+      <!-- Файлове (списък) + Лог -->
+      <div class="space-y-4">
+        <div class="bg-white rounded-xl border p-4">
+          <div class="text-sm font-semibold mb-2">Файлове</div>
+          <ul id="cb-files" class="text-sm space-y-1"></ul>
+        </div>
+        <div class="bg-white rounded-xl border p-4">
+          <div class="text-sm font-semibold mb-2">Лог / Бележки</div>
+          <ul id="cb-log" class="text-sm space-y-2"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const ORDER_ID = {{ order_id|int }};
+  const $ = (s, r=document)=>r.querySelector(s);
+
+  // Tabs
+  const tOverviewBtn = document.querySelector('[data-tab="overview"]');
+  const tCabinetBtn  = document.querySelector('[data-tab="cabinet"]');
+  const tabOverview  = $('#tab-overview');
+  const tabCabinet   = $('#tab-cabinet');
+  function activate(tab){
+    [tOverviewBtn, tCabinetBtn].forEach(b => b.classList.remove('bg-slate-900','text-white'));
+    [tabOverview, tabCabinet].forEach(el => el.classList.add('hidden'));
+    (tab==='cabinet'? tCabinetBtn : tOverviewBtn).classList.add('bg-slate-900','text-white');
+    (tab==='cabinet'? tabCabinet : tabOverview).classList.remove('hidden');
+  }
+  tOverviewBtn.addEventListener('click', ()=> activate('overview'));
+  tCabinetBtn.addEventListener('click', ()=> activate('cabinet'));
+
+  // Print buttons (cache-bust)
+  const printUrl = `/orders/api/cabinet/summary_html?id=${ORDER_ID}`;
+  $('#btn-print-top').href = printUrl;
+  $('#btn-print-overview').href = printUrl;
+  $('#btn-print-cab').href = printUrl;
+
+  // Warn banner
+  const warn = $('#warn');
+
+  // OVERVIEW targets
+  const ov = {
+    title: $('#ov-title'), range: $('#ov-range'), plate: $('#ov-plate'), driver: $('#ov-driver'),
+    pax: $('#ov-pax'), status: $('#ov-status'), b1: $('#ov-b1'), b2: $('#ov-b2'), rt: $('#ov-rt'),
+    price: $('#ov-price'), direct: $('#ov-direct'), gross: $('#ov-gross'), margin: $('#ov-margin'),
+    costs: $('#ov-costs-breakdown'),
+    wmode: $('#ov-w-mode'), wdays: $('#ov-w-days'), whpd: $('#ov-w-hpd'), wht: $('#ov-w-ht'),
+    w2nd: $('#ov-w-2nd'), w2nddays: $('#ov-w-2nddays')
+  };
+
+  // CABINET targets
+  const cb = {
+    title: $('#cb-title'), range: $('#cb-range'), plate: $('#cb-plate'), driver: $('#cb-driver'),
+    drvSel: $('#cb-driver-select'), drvBtn: $('#cb-assign-btn'),
+    uploadForm: $('#cb-upload-form'), files: $('#cb-files'),
+    taskForm: $('#cb-task-form'), taskText: $('#cb-task-text'), taskList: $('#cb-task-list'),
+    msgForm: $('#cb-msg-form'), msgAuthor: $('#cb-msg-author'), msgBody: $('#cb-msg-body'),
+    log: $('#cb-log'), tasksNote: $('#tasks-backend-note')
+  };
+
+  function pill(status){
+    const map = {
+      "Планирана": "bg-sky-100 text-sky-800",
+      "В изпълнение": "bg-amber-100 text-amber-800",
+      "Завършена": "bg-emerald-100 text-emerald-800",
+      "Отменена": "bg-rose-100 text-rose-800",
+      "Фактурирана": "bg-indigo-100 text-indigo-800"
+    };
+    return map[status] || "bg-slate-100 text-slate-800";
+  }
+
+  function fillFromSummary(s){
+    const bk = s.costs_breakdown || {};
+    const wp = s.work_plan || {};
+    ov.title.textContent = s.title || `Поръчка #${ORDER_ID}`;
+    ov.range.textContent = `${s.start_date||'—'} → ${s.end_date||'—'}`;
+    ov.plate.textContent = s.bus_plate || '—';
+    ov.driver.textContent = s.driver_name || (s.driver_assigned ? '(без име)' : '—');
+    ov.pax.textContent = s.pax || '—';
+    ov.status.textContent = s.status || '—';
+    ov.status.className = `inline-block px-2 py-0.5 rounded text-xs ${pill(s.status||'')}`;
+    ov.b1.textContent = s.budget1_tag_date || '—';
+    ov.b2.textContent = s.budget2_tag_date || '—';
+    ov.rt.textContent = s.round_trip ? 'Да' : 'Не';
+
+    ov.price.textContent  = (s.price!=null? `${(+s.price||0).toFixed(2)} €` : '—');
+    ov.direct.textContent = (s.direct_costs!=null? `${(+s.direct_costs||0).toFixed(2)} €` : '—');
+    ov.gross.textContent  = (s.gross_profit!=null? `${(+s.gross_profit||0).toFixed(2)} €` : '—');
+    ov.margin.textContent = (s.margin_pct!=null? `${(+s.margin_pct||0).toFixed(2)} %` : '—');
+
+    ov.costs.textContent = (bk && (bk.fuel_sum!=null)) ?
+      `Разбивка: гориво ${(+bk.fuel_sum||0).toFixed(2)} €, пътни ${(+bk.toll_firm||0).toFixed(2)} €, други ${(+bk.extras_firm||0).toFixed(2)} €, персонал ${(+bk.personnel_total||0).toFixed(2)} €.` :
+      '—';
+
+    ov.wmode.textContent = wp.mode ?? '—';
+    ov.wdays.textContent = (wp.days!=null ? wp.days : '—');
+    ov.whpd.textContent  = (wp.hours_per_day!=null ? wp.hours_per_day : '—');
+    ov.wht.textContent   = (wp.planned_hours_total!=null ? wp.planned_hours_total : '—');
+    ov.w2nd.textContent  = (wp.second_driver===true ? 'Да' : (wp.second_driver===false ? 'Не' : '—'));
+    ov.w2nddays.textContent = (wp.second_driver_days!=null ? wp.second_driver_days : '—');
+
+    // Кабинет заглавка
+    cb.title.textContent = ov.title.textContent;
+    cb.range.textContent = ov.range.textContent;
+    cb.plate.textContent = ov.plate.textContent;
+    cb.driver.textContent= ov.driver.textContent;
+  }
+
+  function fillFiles(files){
+    cb.files.innerHTML = (files||[]).map(f=>{
+      const size = Math.max(1, Math.round((f.size||0)/1024));
+      const when = f.uploaded_at || f.ts || '';
+      const url  = f.url || `/orders/api/files/download?id=${ORDER_ID}&name=${encodeURIComponent(f.name)}`;
+      return `<li class="flex items-center justify-between border rounded-lg px-2 py-1">
+        <div class="truncate">
+          <span class="font-mono text-xs">${f.name}</span>
+          <span class="text-xs text-slate-500"> · ${size} KB${when?(' · '+when):''}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <a class="text-xs underline" href="${url}">Свали</a>
+          <button class="text-xs text-rose-700 hover:underline cb-file-del" data-name="${encodeURIComponent(f.name)}">Изтрий</button>
+        </div>
+      </li>`;
+    }).join('') || '<li class="text-slate-500 text-sm">Няма файлове.</li>';
+  }
+
+  function fillTasks(tasks){
+    cb.taskList.innerHTML = (tasks||[]).map(t=>{
+      const id = t.id ?? t.task_id;
+      const done = !!t.done;
+      const txt = t.text || t.title || '';
+      const meta = (t.assignee?('Отгов.: '+t.assignee+' · '):'') + (t.created_at || t.ts || '');
+      return `<li class="flex items-start gap-2">
+        <input type="checkbox" class="mt-0.5 cb-task-toggle" data-id="${id}" ${done?'checked':''}/>
+        <div class="flex-1">
+          <div class="${done?'line-through text-slate-400':''}">${txt}</div>
+          <div class="text-xs text-slate-500">${meta}</div>
+        </div>
+      </li>`;
+    }).join('') || '<li class="text-slate-500 text-sm">Няма задачи.</li>';
+  }
+
+  function fillLog(log){
+    cb.log.innerHTML = (log||[]).map(row=>{
+      const when = row.when || row.ts || '';
+      const who  = row.author || '';
+      const text = (row.text || '').replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+      return `<li>
+        <div class="text-xs text-slate-500">${when} ${who?('· '+who):''}</div>
+        <div class="text-sm">${text}</div>
+      </li>`;
+    }).join('') || '<li class="text-slate-500 text-sm">Няма записи.</li>';
+  }
+
+  async function fetchJSON(url){
+    const r = await fetch(url, {cache:'no-store'});
+    try { return await r.json(); } catch { return null; }
+  }
+
+  async function loadSnapshot(){
+    warn.classList.remove('hidden');
+
+    // 1) Опитай богатия snapshot
+    let j = await fetchJSON(`/orders/api/cabinet/snapshot?id=${ORDER_ID}&t=${Date.now()}`);
+    if (j && j.ok && j.summary){
+      fillFromSummary(j.summary);
+      fillFiles(j.files);
+      fillTasks(j.tasks);
+      fillLog(j.log);
+      warn.classList.add('hidden');
+      return;
+    }
+
+    // 2) Fallback към стария API /orders/api/cabinet/<id>
+    j = await fetchJSON(`/orders/api/cabinet/${ORDER_ID}?t=${Date.now()}`);
+    if (j && j.ok){
+      // картографирай към базово резюме
+      const o = j.order || {};
+      fillFromSummary({
+        title: o.title,
+        start_date: o.start_date,
+        end_date: o.end_date,
+        bus_plate: o.vehicle_plate,
+        status: '—',
+        driver_name: (j.driver && j.driver.name) || '',
+        driver_assigned: !!(j.driver && j.driver.id!=null),
+        pax: '—',
+        round_trip: null
+        // без финанси/работно време – ще останат с „—“
+      });
+      fillFiles(j.files);
+      const tasks = (j.tasks && j.tasks.tasks) ? j.tasks.tasks.map(t=>({id:t.id, text:t.title, done:t.done, assignee:t.assignee, created_at:t.ts})) : [];
+      fillTasks(tasks);
+      const evs = (j.timeline && j.timeline.events) || [];
+      fillLog(evs.map(ev=>({when: ev.ts, author: ev.author, text: (ev.payload && (ev.payload.text||'')) || ev.type||''})));
+      // оставяме банера скрит, за да не дразни
+      warn.classList.add('hidden');
+      return;
+    }
+
+    // 3) Ако нищо не върне – покажи съобщение
+    warn.textContent = 'Неуспех при зареждане на резюме от бекенда.';
+    warn.classList.remove('hidden');
+  }
+
+  // Drivers
+  async function loadDrivers(){
+    try{
+      const r = await fetch('/drivers/api/list', {cache:'no-store'});
+      const j = await r.json();
+      const arr = Array.isArray(j.drivers)? j.drivers : [];
+      cb.drvSel.innerHTML = '<option value="">— избери —</option>' + arr.map(d=>{
+        const name = [d.last_name||'', d.first_name||''].join(' ').trim() || ('Шофьор #'+d.id);
+        return `<option value="${d.id}">${name}</option>`;
+      }).join('');
+    }catch{
+      cb.drvSel.innerHTML = '<option value="">(няма данни)</option>';
+    }
+  }
+
+  // Actions
+  cb.drvBtn.addEventListener('click', async ()=>{
+    const did = cb.drvSel.value;
+    if(!did){ alert('Избери шофьор.'); return; }
+    const r = await fetch('/orders/api/assign_driver', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ id: ORDER_ID, driver_id: parseInt(did,10) })
+    });
+    const j = await r.json();
+    if(!j.ok){ alert('Грешка при зачисляване.'); return; }
+    await loadSnapshot();
+  });
+
+  cb.taskForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const text = (cb.taskText.value||'').trim();
+    if(!text) return;
+    try{
+      const r = await fetch('/orders/api/tasks/add', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ id: ORDER_ID, text })
+      });
+      const j = await r.json();
+      if(!j.ok) throw 0;
+      cb.taskText.value='';
+      await loadSnapshot();
+    }catch{
+      cb.tasksNote.classList.remove('hidden');
+    }
+  });
+
+  cb.taskList.addEventListener('change', async (e)=>{
+    const box = e.target.closest('.cb-task-toggle');
+    if(!box) return;
+    const tid = parseInt(box.getAttribute('data-id'),10);
+    try{
+      await fetch('/orders/api/tasks/toggle', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ id: ORDER_ID, task_id: tid })
+      });
+      await loadSnapshot();
+    }catch{
+      cb.tasksNote.classList.remove('hidden');
+    }
+  });
+
+  cb.uploadForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(cb.uploadForm);
+    const r = await fetch('/orders/api/files/upload', { method:'POST', body: fd });
+    const j = await r.json().catch(()=>({ok:false}));
+    if(!j.ok){ alert('Качването не успя.'); return; }
+    cb.uploadForm.reset();
+    await loadSnapshot();
+  });
+
+  cb.files.addEventListener('click', async (e)=>{
+    const btn = e.target.closest('.cb-file-del');
+    if(!btn) return;
+    const name = decodeURIComponent(btn.getAttribute('data-name')||'');
+    if(!name) return;
+    if(!confirm(`Изтриване на файл "${name}"?`)) return;
+    await fetch('/orders/api/files/delete', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ id: ORDER_ID, name })
+    });
+    await loadSnapshot();
+  });
+
+  cb.msgForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const author = ($('#cb-msg-author').value||'').trim() || undefined;
+    const text   = ($('#cb-msg-body').value||'').trim();
+    if(!text) return;
+    await fetch('/orders/api/messages/add', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ id: ORDER_ID, text, author })
+    });
+    $('#cb-msg-author').value=''; $('#cb-msg-body').value='';
+    await loadSnapshot();
+  });
+
+  // Init
+  activate('overview');
+  loadDrivers().then(loadSnapshot);
+})();
+</script>
+
+{% endblock %}

@@ -1,0 +1,104 @@
+
+{% extends "base.html" %}
+{% block title %}Сервизна книжка · {{ bus.reg_no }}{% endblock %}
+{% block content %}
+
+
+<div class="flex items-center justify-between mb-4">
+  <div class="flex items-center gap-3">
+    <a href="{{ url_for('buses.index') }}" class="text-slate-600 hover:underline">← Назад към регистъра</a>
+  </div>
+  <div class="flex items-center gap-2">
+    {% if prev_id %}
+      <a class="px-3 py-1 rounded bg-slate-100 hover:bg-slate-200" href="{{ url_for('buses.service_book', bus_id=prev_id) }}">‹ Предишен</a>
+    {% else %}
+      <span class="px-3 py-1 rounded bg-slate-50 text-slate-400 cursor-not-allowed">‹ Предишен</span>
+    {% endif %}
+    {% if next_id %}
+      <a class="px-3 py-1 rounded bg-slate-100 hover:bg-slate-200" href="{{ url_for('buses.service_book', bus_id=next_id) }}">Следващ ›</a>
+    {% else %}
+      <span class="px-3 py-1 rounded bg-slate-50 text-slate-400 cursor-not-allowed">Следващ ›</span>
+    {% endif %}
+  </div>
+</div>
+
+<h1 class="text-xl font-semibold mb-4">Сервизна книжка — <span class="text-slate-500">{{ bus.reg_no or ("#" ~ bus.id) }}</span></h1>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <div class="lg:col-span-2">
+    <div class="bg-white shadow rounded-2xl overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-100 text-slate-700">
+            <tr>
+              <th class="text-left p-3">#</th>
+              <th class="text-left p-3">Дата</th>
+              <th class="text-left p-3">Вид</th>
+              <th class="text-left p-3">Описание</th>
+              <th class="text-left p-3">Сума</th>
+              <th class="text-left p-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for e in bus.service_log %}
+            <tr class="border-t">
+              <td class="p-3 text-slate-500">{{ e.id }}</td>
+              <td class="p-3">{{ e.date }}</td>
+              <td class="p-3">{% if e.kind=='repair' %}Ремонт{% else %}Разход{% endif %}</td>
+              <td class="p-3">{{ e.title }}</td>
+              <td class="p-3">{{ e.amount }}</td>
+              <td class="p-3 text-right">
+                <form method="post" action="{{ url_for('buses.delete_service_entry', bus_id=bus.id, entry_id=e.id) }}" onsubmit="return confirm('Да изтрием ли записа?');">
+                  <button class="text-red-600 hover:underline">Изтрий</button>
+                </form>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="p-6 text-center text-slate-500">Няма записи.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="bg-white shadow rounded-2xl p-4">
+      <h2 class="font-medium mb-3">Нов запис</h2>
+      <form method="post" class="grid grid-cols-1 gap-3">
+        <div>
+          <label class="block text-sm text-slate-600">Дата</label>
+          <input type="date" name="date" class="mt-1 w-full border rounded-xl px-3 py-2">
+        </div>
+        <div>
+          <label class="block text-sm text-slate-600">Вид</label>
+          <select name="kind" class="mt-1 w-full border rounded-xl px-3 py-2">
+            <option value="repair">Ремонт</option>
+            <option value="expense">Разход</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-600">Описание</label>
+          <input name="title" class="mt-1 w-full border rounded-xl px-3 py-2" required>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-600">Сума</label>
+          <input name="amount" type="number" step="0.01" class="mt-1 w-full border rounded-xl px-3 py-2">
+        </div>
+        <div>
+          <label class="block text-sm text-slate-600">Бележки</label>
+          <textarea name="notes" class="mt-1 w-full border rounded-xl px-3 py-2" rows="2"></textarea>
+        </div>
+        <button class="bg-slate-900 text-white px-4 py-2 rounded-xl">Добави</button>
+      </form>
+
+      <div class="mt-4 text-sm text-slate-600">
+        <div class="flex justify-between"><span>Общо ремонти:</span><span>{{ '%.2f'|format(total_repairs) }} лв.</span></div>
+        <div class="flex justify-between"><span>Общи разходи:</span><span>{{ '%.2f'|format(total_expenses) }} лв.</span></div>
+      </div>
+      <div class="mt-4">
+        <a href="{{ url_for('buses.index') }}" class="text-slate-600 hover:underline">← Назад към регистъра</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

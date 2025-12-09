@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Статистики · Общ преглед{% endblock %}
+
+{% block content %}
+<h1 class="text-xl font-semibold mb-4">Статистики — Общ преглед</h1>
+
+<div class="bg-white shadow rounded-2xl p-6 text-slate-600">
+    <p class="text-sm">
+        Тук ще бъде добавен общ преглед на статистическите показатели.
+        Изберете секция от менюто вляво:
+    </p>
+
+    <ul class="list-disc mt-4 ml-6 text-sm">
+        <li><a href="{{ url_for('stats.buses_stats') }}" class="text-slate-900 font-medium hover:underline">
+            Ефективност на използване
+        </a></li>
+        <li><a href="{{ url_for('stats.buses_finance') }}" class="text-slate-900 font-medium hover:underline">
+            Финансови показатели
+        </a></li>
+    </ul>
+</div>
+{% endblock %}

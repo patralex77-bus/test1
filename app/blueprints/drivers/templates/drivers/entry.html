@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Шофьори · {% if driver %}Редакция{% else %}Нов{% endif %}{% endblock %}
+{% block content %}
+
+<h1 class="text-xl font-semibold mb-4 flex items-center justify-between">
+  <span>{% if driver %}Редакция на шофьор{% else %}Нов шофьор{% endif %}</span>
+  <a class="px-3 py-2 rounded-xl border hover:bg-slate-50" href="{{ url_for('drivers.list') }}">Назад</a>
+</h1>
+
+<div class="bg-white rounded-2xl shadow p-4">
+  <form method="post">
+    <div class="grid md:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-sm text-slate-600">Име</label>
+        <input name="first_name" class="mt-1 w-full border rounded-xl px-3 py-2" value="{{ driver.first_name if driver else '' }}" required>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-600">Фамилия</label>
+        <input name="last_name" class="mt-1 w-full border rounded-xl px-3 py-2" value="{{ driver.last_name if driver else '' }}" required>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-4 gap-4 mt-4">
+      <div>
+        <label class="block text-sm text-slate-600">СУМПС валидно до</label>
+        <input type="date" name="license_valid_until" class="mt-1 w-full border rounded-xl px-3 py-2" value="{{ driver.docs.license_valid_until if driver and driver.docs else '' }}">
+      </div>
+      <div>
+        <label class="block text-sm text-slate-600">Карта валидна до</label>
+        <input type="date" name="card_valid_until" class="mt-1 w-full border rounded-xl px-3 py-2" value="{{ driver.docs.card_valid_until if driver and driver.docs else '' }}">
+      </div>
+      <div>
+        <label class="block text-sm text-slate-600">Паспорт валиден до</label>
+        <input type="date" name="passport_valid_until" class="mt-1 w-full border rounded-xl px-3 py-2" value="{{ driver.docs.passport_valid_until if driver and driver.docs else '' }}">
+      </div>
+      <div>
+        <label class="block text-sm text-slate-600">Медицински до</label>
+        <input type="date" name="med_check_valid_until" class="mt-1 w-full border rounded-xl px-3 py-2" value="{{ driver.docs.med_check_valid_until if driver and driver.docs else '' }}">
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <label class="block text-sm text-slate-600">Бележки</label>
+      <textarea name="notes" rows="3" class="mt-1 w-full border rounded-xl px-3 py-2">{{ driver.notes if driver else '' }}</textarea>
+    </div>
+
+    <div class="flex justify-end mt-4">
+      <button class="bg-slate-900 text-white px-4 py-2 rounded-xl">
+        {% if driver %}Запази промените{% else %}Добави шофьор{% endif %}
+      </button>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

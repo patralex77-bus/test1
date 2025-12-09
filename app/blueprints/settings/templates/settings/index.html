@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+{% block content %}
+<h1 class="text-xl font-semibold mb-4">Настройки</h1>
+
+<div class="grid sm:grid-cols-2 gap-4">
+  <a href="{{ url_for('settings_countries.countries') }}" class="block bg-white rounded-2xl shadow p-4 hover:bg-slate-50">
+    <div class="font-semibold mb-1">Държави</div>
+    <div class="text-sm text-slate-600">Тарифи по държави, гориво, ДДС.</div>
+  </a>
+
+  <a href="{{ url_for('settings_countries.payroll') }}" class="block bg-white rounded-2xl shadow p-4 hover:bg-slate-50">
+    <div class="font-semibold mb-1">Заплати</div>
+    <div class="text-sm text-slate-600">Дневна FIX, часови ставки, мин/макс часове.</div>
+  </a>
+</div>
+{% endblock %}

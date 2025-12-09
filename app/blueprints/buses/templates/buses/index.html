@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block title %}Автобуси · Регистър{% endblock %}
+{% block content %}
+<h1 class="text-xl font-semibold mb-4">Автобуси — Регистър</h1>
+
+<div class="bg-white shadow rounded-2xl p-4 mb-6">
+  <form method="post" action="{{ url_for('buses.index') }}" class="grid grid-cols-1 md:grid-cols-8 gap-3">
+    {# НОВО: ако сме в режим редакция, подай hidden edit_id #}
+    {% if edit_bus %}
+      <input type="hidden" name="edit_id" value="{{ edit_bus.id }}">
+    {% endif %}
+
+    <div>
+      <label class="block text-sm text-slate-600">Номер (рег. №)</label>
+      <input name="reg_no"
+             class="mt-1 w-full border rounded-xl px-3 py-2"
+             required
+             value="{{ (edit_bus.reg_no if edit_bus else '') }}" />
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600">Места</label>
+      <input name="seats" type="number" min="1"
+             class="mt-1 w-full border rounded-xl px-3 py-2"
+             value="{{ (edit_bus.seats if edit_bus and edit_bus.seats is not none else '') }}" />
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600">Дата ГТП</label>
+      <input name="tech_inspection_date" type="date"
+             class="mt-1 w-full border rounded-xl px-3 py-2"
+             value="{{ (edit_bus.tech_inspection_date if edit_bus else '') }}" />
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600">Разход (л/100км)</label>
+      <input name="fuel_consumption" type="number" step="0.1"
+             class="mt-1 w-full border rounded-xl px-3 py-2"
+             value="{{ (edit_bus.fuel_consumption if edit_bus and edit_bus.fuel_consumption is not none else '') }}" />
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600">Резервоар (л)</label>
+      <input name="tank_size" type="number"
+             class="mt-1 w-full border rounded-xl px-3 py-2"
+             value="{{ (edit_bus.tank_size if edit_bus and edit_bus.tank_size is not none else '') }}" />
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600">Застраховка (лв.)</label>
+      <input name="insurance_cost" type="number" step="0.01"
+             class="mt-1 w-full border rounded-xl px-3 py-2"
+             value="{{ (edit_bus.insurance_cost if edit_bus and edit_bus.insurance_cost is not none else '') }}" />
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600">Месечен кредит</label>
+      <input name="monthly_credit" type="number" step="0.01"
+             class="mt-1 w-full border rounded-xl px-3 py-2"
+             value="{{ (edit_bus.monthly_credit if edit_bus and edit_bus.monthly_credit is not none else '') }}" />
+    </div>
+    <div class="flex items-end gap-2">
+      <button class="w-full md:w-auto bg-slate-900 text-white px-4 py-2 rounded-xl">
+        {{ 'Запази промените' if edit_bus else 'Добави' }}
+      </button>
+      {% if edit_bus %}
+        <a href="{{ url_for('buses.index') }}"
+           class="w-full md:w-auto px-4 py-2 rounded-xl border hover:bg-slate-50 text-center">
+          Откажи
+        </a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+<div class="bg-white shadow rounded-2xl overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-slate-100 text-slate-700">
+        <tr>
+          <th class="text-left p-3">#</th>
+          <th class="text-left p-3">Номер</th>
+          <th class="text-left p-3">Места</th>
+          <th class="text-left p-3">ГТП</th>
+          <th class="text-left p-3">Разход (л/100км)</th>
+          <th class="text-left p-3">Резервоар (л)</th>
+          <th class="text-left p-3">Застраховка</th>
+          <th class="text-left p-3">Кредит/месец</th>
+          <th class="text-left p-3">Статус</th>
+          <th class="text-left p-3"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in buses %}
+        <tr class="border-t {{ "opacity-60" if b.inactive else "" }}">
+          <td class="p-3 text-slate-500">{{ b.id }}</td>
+          <td class="p-3 font-medium">{{ b.reg_no }}</td>
+          <td class="p-3">{{ b.seats or "" }}</td>
+          <td class="p-3">{{ b.tech_inspection_date or "" }}</td>
+          <td class="p-3">{{ b.fuel_consumption or "" }}</td>
+          <td class="p-3">{{ b.tank_size or "" }}</td>
+          <td class="p-3">{{ b.insurance_cost or "" }}</td>
+          <td class="p-3">{{ b.monthly_credit or "" }}</td>
+          <td class="p-3">
+            {% if b.inactive %}
+              <span class="px-2 py-1 text-xs rounded bg-slate-200">НЕАКТИВЕН</span>
+            {% else %}
+              <span class="px-2 py-1 text-xs rounded bg-green-100 text-green-700">Активен</span>
+            {% endif %}
+          </td>
+          <td class="p-3">
+            <div class="flex items-center justify-end gap-1">
+
+              <!-- НОВО: Бутон Редакция (молив) -->
+              <a class="p-2 rounded-lg hover:bg-slate-100"
+                 href="{{ url_for('buses.edit', bus_id=b.id) }}"
+                 title="Редактирай" aria-label="Редактирай">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" fill="none" viewBox="0 0 24 24" stroke-width="1.8">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487a2.25 2.25 0 113.182 3.182L7.5 20.213 3 21l.787-4.5L16.862 4.487z"/>
+                </svg>
+                <span class="sr-only">Редакция</span>
+              </a>
+
+              <!-- Сервизна книжка (икона книга) -->
+              <a class="p-2 rounded-lg hover:bg-slate-100"
+                 href="{{ url_for('buses.service_book', bus_id=b.id) }}"
+                 title="Сервизна книжка" aria-label="Сервизна книжка">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-slate-700" viewBox="0 0 24 24" fill="none" stroke-width="1.8">
+                  <!-- book-open style -->
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                        d="M12 6.75c-1.5-1-3.5-1.5-6-1.5-1.5 0-3 .5-3 .5v12s1.5-.5 3-.5c2.5 0 4.5.5 6 1.5m0-12c1.5-1 3.5-1.5 6-1.5 1.5 0 3 .5 3 .5v12s-1.5-.5-3-.5c-2.5 0-4.5.5-6 1.5"/>
+                </svg>
+                <span class="sr-only">Сервизна книжка</span>
+              </a>
+
+              {% if not b.inactive %}
+              <!-- Деактивирай (Pause circle) -->
+              <button type="button"
+                      class="p-2 rounded-lg hover:bg-amber-50 text-amber-700"
+                      title="Маркирай неактивен" aria-label="Маркирай неактивен"
+                      onclick="return (function(plate, busId){
+                        function readOrdersAny(){
+                          try{
+                            const a = JSON.parse(localStorage.getItem('busops:orders_v1')||'[]');
+                            const b = JSON.parse(localStorage.getItem('orders_fallback_store_v1')||'[]');
+                            return ([]).concat(Array.isArray(a)?a:[], Array.isArray(b)?b:[]);
+                          }catch(e){ return []; }
+                        }
+                        function hasFutureOrders(p){
+                          if(!p) return false;
+                          const orders = readOrdersAny();
+                          const today = new Date().toISOString().slice(0,10);
+                          return orders.some(o => String(o.vehicle_plate||'')===p && String(o.date||'') >= today);
+                        }
+                        var p  = (plate||'').trim();
+                        var id = String(busId||'').trim();
+                        if(!p && !id){ alert('Този автобус няма рег. номер. Редактирай и добави табела първо.'); return false; }
+                        if(p && hasFutureOrders(p)){ alert('Автобусът има бъдещи поръчки и не може да бъде маркиран като неактивен.'); return false; }
+                        if(!confirm('Да маркираме ли автобуса '+(p||('#'+id))+' като неактивен?')) return false;
+                        var form = document.createElement('form');
+                        form.method = 'POST';
+                        form.action = '/buses/set_inactive/' + id;
+                        var inp = document.createElement('input');
+                        inp.type = 'hidden'; inp.name = 'plate'; inp.value = p || '';
+                        form.appendChild(inp);
+                        document.body.appendChild(form);
+                        form.submit();
+                        return false;
+                      })('{{ b.reg_no or '' }}','{{ b.id }}')">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-amber-700" viewBox="0 0 24 24" fill="none" stroke-width="1.8">
+                  <circle cx="12" cy="12" r="9"></circle>
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6M14 9v6"/>
+                </svg>
+                <span class="sr-only">Маркирай неактивен</span>
+              </button>
+              {% else %}
+              <!-- Активирай обратно (Check circle) -->
+              <button type="button"
+                      class="p-2 rounded-lg hover:bg-green-50 text-green-700"
+                      title="Активирай" aria-label="Активирай"
+                      onclick="(function(busId){
+                        if(!confirm('Да активираме ли автобуса #'+busId+'?')) return;
+                        var form = document.createElement('form');
+                        form.method = 'POST';
+                        form.action = '/buses/set_active/' + String(busId);
+                        document.body.appendChild(form);
+                        form.submit();
+                      })('{{ b.id }}')">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-green-700" viewBox="0 0 24 24" fill="none" stroke-width="1.8">
+                  <circle cx="12" cy="12" r="9"></circle>
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.5 12.5l2.5 2.5 4.5-5"/>
+                </svg>
+                <span class="sr-only">Активирай</span>
+              </button>
+              {% endif %}
+
+              <!-- Изтрий (кошче) -->
+              <form method="post"
+                    action="{{ url_for('buses.delete_bus', bus_id=b.id) }}"
+                    class="inline-block"
+                    onsubmit="return confirm('Да изтрием ли автобуса?');">
+                <button class="p-2 rounded-lg hover:bg-red-50" title="Изтрий" aria-label="Изтрий">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 stroke-red-600" viewBox="0 0 24 24" fill="none" stroke-width="1.8">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2m1 0l-.867 12.142A2 2 0 0113.138 21H10.86a2 2 0 01-1.995-1.858L8 7h8"/>
+                  </svg>
+                  <span class="sr-only">Изтрий</span>
+                </button>
+              </form>
+
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="p-6 text-center text-slate-500">Няма добавени автобуси.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,245 @@
+{% extends "drivers/base_driver.html" %}
+{% set active_page = 'dashboard' %}
+{% block title %}Кабинет шофьор · Табло{% endblock %}
+
+{% block content %}
+
+<div class="flex items-center justify-between mb-4">
+  <div>
+    <h1 class="text-xl font-semibold">Dashboard</h1>
+    <div class="text-sm text-slate-500">
+      {{ today_label }}
+    </div>
+  </div>
+
+  {% if drivers_list and drivers_list|length > 1 %}
+    <form method="get" class="flex items-center gap-2 text-sm">
+      <label class="text-xs text-slate-500">Шофьор</label>
+      <select name="driver_id"
+              class="border rounded-lg px-2 py-1 text-sm"
+              onchange="this.form.submit()">
+        {% for d in drivers_list %}
+          <option value="{{ d.id }}"
+                  {% if d.id == current_driver.id %}selected{% endif %}>
+            {{ d.name }}
+          </option>
+        {% endfor %}
+      </select>
+    </form>
+  {% endif %}
+</div>
+
+{# ==== Обобщение за ДНЕС (едно поле с три показателя) ==== #}
+<div class="bg-white shadow rounded-2xl p-4 mb-4">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-semibold">Обобщение за днес</h2>
+    <div class="text-xs text-slate-500">
+      {{ today_label }}
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+    <div class="border rounded-xl p-3">
+      <div class="text-xs text-slate-500 mb-1">Брой курсове</div>
+      <div class="text-xl font-semibold">
+        {{ today_stats.count }}
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ==== Поръчки за ДНЕС ==== #}
+<div class="bg-white shadow rounded-2xl p-4 mb-4">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-semibold">Поръчки за днес</h2>
+    <div class="text-xs text-slate-500">
+      {{ today_label }}
+    </div>
+  </div>
+
+  {% if today_orders %}
+    <div class="space-y-3">
+      {% for o in today_orders %}
+        <div class="border rounded-2xl px-3 py-2 flex flex-col gap-1">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-sm font-semibold">
+              {{ o.title or (o.origin ~ ' → ' ~ o.destination) or ('Поръчка #' ~ o.id) }}
+            </div>
+          </div>
+
+<div class="flex items-center justify-between gap-2 text-xs text-slate-600">
+  <div>
+    <span class="font-medium">
+      {{ o.start_time or '—' }}{% if o.end_time %} – {{ o.end_time }}{% endif %}
+    </span>
+  </div>
+  <div class="flex items-center gap-2">
+    <button
+      type="button"
+      class="confirm-toggle inline-flex items-center px-2.5 py-1 rounded-lg text-[11px] border
+             {% if o.is_confirmed %}
+               bg-emerald-50 text-emerald-700 border-emerald-200
+             {% else %}
+               bg-blue-600 text-white border-blue-600 hover:bg-blue-700
+             {% endif %}"
+      data-order-id="{{ o.id }}"
+      data-confirmed="{{ '1' if o.is_confirmed else '0' }}"
+    >
+      {% if o.is_confirmed %}
+        ✓ Потвърдена (отмени)
+      {% else %}
+        Потвърждавам поръчката
+      {% endif %}
+    </button>
+  </div>
+</div>
+
+
+          {% if o.origin or o.destination %}
+            <div class="text-xs text-slate-500">
+              {{ o.origin or '—' }} → {{ o.destination or '—' }}
+            </div>
+          {% endif %}
+
+          <div class="flex items-center gap-2 mt-1">
+            <a href="{{ url_for('driver_portal.order_detail', order_id=o.id) }}"
+               class="inline-flex items-center px-2.5 py-1 rounded-lg border text-[11px] hover:bg-slate-50">
+              Подробности
+            </a>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="text-sm text-slate-500">
+      Няма поръчки за днес.
+    </div>
+  {% endif %}
+</div>
+
+{# ==== Поръчки за УТРЕ ==== #}
+<div class="bg-white shadow rounded-2xl p-4 mb-4">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-semibold">Поръчки за утре</h2>
+    <div class="text-xs text-slate-500">
+      {{ tomorrow_label }}
+    </div>
+  </div>
+
+  {% if tomorrow_orders %}
+    <div class="space-y-3">
+      {% for o in tomorrow_orders %}
+        <div class="border rounded-2xl px-3 py-2 flex flex-col gap-1">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-sm font-semibold">
+              {{ o.title or (o.origin ~ ' → ' ~ o.destination) or ('Поръчка #' ~ o.id) }}
+            </div>
+          </div>
+
+<div class="flex items-center justify-between gap-2 text-xs text-slate-600">
+  <div>
+    <span class="font-medium">
+      {{ o.start_time or '—' }}{% if o.end_time %} – {{ o.end_time }}{% endif %}
+    </span>
+  </div>
+  <div class="flex items-center gap-2">
+    <button
+      type="button"
+      class="confirm-toggle inline-flex items-center px-2.5 py-1 rounded-lg text-[11px] border
+             {% if o.is_confirmed %}
+               bg-emerald-50 text-emerald-700 border-emerald-200
+             {% else %}
+               bg-blue-600 text-white border-blue-600 hover:bg-blue-700
+             {% endif %}"
+      data-order-id="{{ o.id }}"
+      data-confirmed="{{ '1' if o.is_confirmed else '0' }}"
+    >
+      {% if o.is_confirmed %}
+        ✓ Потвърдена (отмени)
+      {% else %}
+        Потвърждавам поръчката
+      {% endif %}
+    </button>
+  </div>
+</div>
+
+
+          {% if o.origin or o.destination %}
+            <div class="text-xs text-slate-500">
+              {{ o.origin or '—' }} → {{ o.destination or '—' }}
+            </div>
+          {% endif %}
+
+          <div class="flex items-center gap-2 mt-1">
+            <a href="{{ url_for('driver_portal.order_detail', order_id=o.id) }}"
+               class="inline-flex items-center px-2.5 py-1 rounded-lg border text-[11px] hover:bg-slate-50">
+              Подробности
+            </a>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="text-sm text-slate-500">
+      Няма поръчки за утре.
+    </div>
+  {% endif %}
+</div>
+
+<script>
+document.addEventListener("click", async function (e) {
+  const btn = e.target.closest(".confirm-toggle");
+  if (!btn) return;
+
+  const orderId = btn.dataset.orderId;
+  const confirmed = btn.dataset.confirmed === "1";
+
+  const formData = new FormData();
+  formData.append("action", confirmed ? "unconfirm" : "confirm");
+
+  // временно състояние
+  btn.disabled = true;
+  const originalText = btn.innerText;
+  btn.innerText = confirmed ? "Отменям..." : "Потвърждавам...";
+
+  try {
+    const res = await fetch(`/driver-portal/orders/${orderId}/confirm`, {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      alert("Грешка: " + (data.error || `HTTP ${res.status}`));
+      btn.disabled = false;
+      btn.innerText = originalText;
+      return;
+    }
+
+    const nowConfirmed = !!data.is_confirmed;
+    btn.dataset.confirmed = nowConfirmed ? "1" : "0";
+
+    if (nowConfirmed) {
+      // стил за потвърдена
+      btn.classList.remove("bg-blue-600", "text-white", "border-blue-600", "hover:bg-blue-700");
+      btn.classList.add("bg-emerald-50", "text-emerald-700", "border-emerald-200");
+      btn.innerText = "✓ Потвърдена (отмени)";
+    } else {
+      // стил за непотвърдена
+      btn.classList.remove("bg-emerald-50", "text-emerald-700", "border-emerald-200");
+      btn.classList.add("bg-blue-600", "text-white", "border-blue-600", "hover:bg-blue-700");
+      btn.innerText = "Потвърждавам поръчката";
+    }
+
+    btn.disabled = false;
+  } catch (err) {
+    console.error(err);
+    alert("Грешка при връзка със сървъра.");
+    btn.disabled = false;
+    btn.innerText = originalText;
+  }
+});
+</script>
+
+
+{% endblock %}

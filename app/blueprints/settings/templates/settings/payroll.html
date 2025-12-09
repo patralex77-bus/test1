@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Настройки · Заплати{% endblock %}
+{% block content %}
+
+<h1 class="text-xl font-semibold mb-4 flex items-center justify-between">
+  <span>Настройки: Заплати</span>
+  <a class="p-2 rounded-lg border hover:bg-slate-50" href="{{ url_for('settings_countries.index') }}">Назад</a>
+</h1>
+
+<form method="post" class="bg-white rounded-2xl shadow p-4 max-w-xl space-y-4">
+  <div>
+    <label class="block text-sm text-slate-600 mb-1">Дневна ставка FIX (€)</label>
+    <input name="daily_fixed" type="number" step="0.01" value="{{ '%.2f'|format(s.daily_fixed or 0) }}"
+           class="w-full border rounded-xl px-3 py-2">
+  </div>
+
+  <div class="grid sm:grid-cols-2 gap-4">
+    <div>
+      <label class="block text-sm text-slate-600 mb-1">Часова ставка по договор (€)</label>
+      <input name="hourly_contract" type="number" step="0.01" value="{{ '%.2f'|format(s.hourly_contract or 0) }}"
+             class="w-full border rounded-xl px-3 py-2">
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600 mb-1">Часова ставка по договореност (€)</label>
+      <input name="hourly_custom" type="number" step="0.01" value="{{ '%.2f'|format(s.hourly_custom or 0) }}"
+             class="w-full border rounded-xl px-3 py-2">
+    </div>
+  </div>
+
+  <div class="grid sm:grid-cols-2 gap-4">
+    <div>
+      <label class="block text-sm text-slate-600 mb-1">Мин. заетост / ден (часове)</label>
+      <input name="min_hours" type="number" step="0.01" value="{{ '%.2f'|format(s.min_hours or 0) }}"
+             class="w-full border rounded-xl px-3 py-2">
+    </div>
+    <div>
+      <label class="block text-sm text-slate-600 mb-1">Макс. заетост / ден (часове)</label>
+      <input name="max_hours" type="number" step="0.01" value="{{ '%.2f'|format(s.max_hours or 0) }}"
+             class="w-full border rounded-xl px-3 py-2">
+    </div>
+  </div>
+
+  <div class="pt-2">
+    <button class="px-4 py-2 rounded-xl border hover:bg-slate-50">Запази</button>
+  </div>
+</form>
+
+{% endblock %}

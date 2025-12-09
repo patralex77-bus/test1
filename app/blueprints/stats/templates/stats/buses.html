@@ -1,0 +1,325 @@
+{% extends "base.html" %}
+{% block title %}Статистика · Автобуси{% endblock %}
+{% block content %}
+<h1 class="text-xl font-semibold mb-4">Статистика — Автобуси</h1>
+
+{# =========================================================
+   1. ЕФЕКТИВНОСТ НА ИЗПОЛЗВАНЕ (🚍 bus-efficiency)
+   ========================================================= #}
+<section id="bus-efficiency" class="mb-8">
+  <div class="bg-white shadow rounded-2xl p-4 mb-4">
+    <form method="get" class="grid md:grid-cols-6 gap-3 items-end">
+      <div>
+        <label class="block text-sm text-slate-600">Период</label>
+        <select name="period" class="mt-1 w-full border rounded-xl px-3 py-2">
+          <option value="day"   {{ 'selected' if period=='day' }}>Ден</option>
+          <option value="week"  {{ 'selected' if period=='week' }}>Седмица</option>
+          <option value="month" {{ 'selected' if period=='month' }}>Месец</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-600">От дата</label>
+        <input type="date" name="from" value="{{ dfrom }}" class="mt-1 w-full border rounded-xl px-3 py-2">
+      </div>
+      <div>
+        <label class="block text-sm text-slate-600">До дата</label>
+        <input type="date" name="to" value="{{ dto }}" class="mt-1 w-full border rounded-xl px-3 py-2">
+      </div>
+      <div class="md:col-span-2 text-slate-500 text-sm">
+        Суми и средни стойности от записите на шофьорите за избрания период.
+        {% if days_count %}
+          ({{ days_count }} дни)
+        {% endif %}
+      </div>
+      <div>
+        <button class="mt-6 px-4 py-2 rounded-xl border bg-slate-900 text-white">Покажи</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="bg-white shadow rounded-2xl overflow-x-auto">
+    <table class="min-w-[1200px] w-full text-sm">
+      <thead class="bg-slate-100 text-slate-700">
+        <tr>
+          <th rowspan="2" class="p-3 text-left sticky left-0 bg-slate-100">Автобус</th>
+          <th colspan="2" class="p-3 text-center border-l">Километри</th>
+          <th colspan="2" class="p-3 text-center border-l">Гориво</th>
+          <th colspan="2" class="p-3 text-center border-l">Ефективност</th>
+          <th colspan="3" class="p-3 text-center border-l">Използваемост и курсове</th>
+        </tr>
+        <tr class="border-b bg-slate-100 text-slate-600">
+          <th class="p-2 text-right">Общо km</th>
+          <th class="p-2 text-right">Средно/ден km</th>
+
+          <th class="p-2 text-right border-l">Общо литри</th>
+          <th class="p-2 text-right">Разход (лв.)</th>
+
+          <th class="p-2 text-right border-l">l/100km</th>
+          <th class="p-2 text-right">Цена/км</th>
+
+          <th class="p-2 text-right border-l">Часове в движение</th>
+          <th class="p-2 text-right">Използваемост (%)</th>
+          <th class="p-2 text-right">Курсове/ден</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% if rows and rows|length > 0 %}
+        {% for r in rows %}
+        <tr class="border-t">
+          <td class="p-3 sticky left-0 bg-white">
+            <div class="flex items-center gap-2">
+              {% if r.inactive %}
+                <span class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200" title="Неактивен">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="12" cy="12" r="6"/>
+                  </svg>
+                  Неактивен
+                </span>
+                <span class="font-medium text-slate-400 line-through">{{ r.reg_no }}</span>
+              {% else %}
+                <span class="font-medium text-slate-900">{{ r.reg_no }}</span>
+              {% endif %}
+            </div>
+          </td>
+
+          <!-- Километри -->
+          <td class="p-3 text-right">{{ '%.0f'|format(r.stats.km) }}</td>
+          <td class="p-3 text-right">{{ '%.1f'|format(r.stats.km_avg_day) }}</td>
+
+          <!-- Гориво -->
+          <td class="p-3 text-right border-l">{{ '%.1f'|format(r.stats.fuel_l) }}</td>
+          <td class="p-3 text-right">{{ '%.2f'|format(r.stats.fuel_money) }}</td>
+
+          <!-- Ефективност -->
+          <td class="p-3 text-right border-l">{{ '%.2f'|format(r.stats.l_per_100km) }}</td>
+          <td class="p-3 text-right">{{ '%.3f'|format(r.stats.cost_per_km) }}</td>
+
+          <!-- Използваемост и курсове -->
+          <td class="p-3 text-right border-l">
+            {{ '%.1f'|format(r.stats.hours) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.1f'|format(r.stats.utilisation_pct) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.2f'|format(r.stats.trips_per_day) }}
+          </td>
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td colspan="11" class="p-6 text-center text-slate-500">
+            Няма данни за показване. Проверете <code>data/buses.json</code> и <code>data/driver_logs.json</code>,
+            както и датите във филтъра.
+          </td>
+        </tr>
+      {% endif %}
+      </tbody>
+      <tfoot class="bg-slate-50 font-medium border-t">
+        <tr>
+          <td class="p-3 sticky left-0 bg-slate-50">Средно (флот)</td>
+
+          <!-- Километри -->
+          <td class="p-3 text-right">{{ '%.0f'|format(totals.km) }}</td>
+          <td class="p-3 text-right">{{ '%.1f'|format(fleet.km_avg_day) }}</td>
+
+          <!-- Гориво -->
+          <td class="p-3 text-right border-l">{{ '%.1f'|format(totals.fuel_l) }}</td>
+          <td class="p-3 text-right">{{ '%.2f'|format(fleet.fuel_money_total) }}</td>
+
+          <!-- Ефективност -->
+          <td class="p-3 text-right border-l">{{ '%.2f'|format(fleet.l_per_100km) }}</td>
+          <td class="p-3 text-right">{{ '%.3f'|format(fleet.cost_per_km) }}</td>
+
+          <!-- Използваемост и курсове -->
+          <td class="p-3 text-right border-l">
+            {{ '%.1f'|format(fleet.hours_total) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.1f'|format(fleet.utilisation_pct) if fleet.utilisation_pct is defined else 0.0 }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.2f'|format(fleet.trips_per_bus_per_day) }}
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</section>
+
+{# =========================================================
+   2. ФИНАНСОВИ ПОКАЗАТЕЛИ (💰 finance)
+   ========================================================= #}
+<section id="finance" class="mt-10">
+  <h2 class="text-lg font-semibold mb-3">💰 2. Финансови показатели</h2>
+  <p class="text-xs text-slate-500 mb-4">
+    Приходи и разходи по автобус за избрания период. 
+    Метрики: планирани/реални км, приходи/км, отклонение, разходи за техника,
+    поддръжка, разходи/км и разходи за труд/курс.
+  </p>
+
+  <div class="bg-white shadow rounded-2xl overflow-x-auto">
+    <table class="min-w-[1300px] w-full text-sm">
+      <thead class="bg-slate-100 text-slate-700">
+        <tr>
+          <th rowspan="2" class="p-3 text-left sticky left-0 bg-slate-100">Автобус</th>
+
+          <th colspan="2" class="p-3 text-center border-l">Километри</th>
+          <th colspan="3" class="p-3 text-center border-l">Приходи</th>
+          <th colspan="4" class="p-3 text-center border-l">Разходи</th>
+        </tr>
+        <tr class="border-b bg-slate-100 text-slate-600">
+          <!-- Километри -->
+          <th class="p-2 text-right border-l">Планирани км</th>
+          <th class="p-2 text-right">Реални км</th>
+
+          <!-- Приходи -->
+          <th class="p-2 text-right border-l">Приходи / км</th>
+          <th class="p-2 text-right">Реални приходи / км</th>
+          <th class="p-2 text-right">Отклонение (%)</th>
+
+          <!-- Разходи -->
+          <th class="p-2 text-right border-l">Разходи за техника / период</th>
+          <th class="p-2 text-right">Разходи за поддръжка / период</th>
+          <th class="p-2 text-right">Разходи / км</th>
+          <th class="p-2 text-right">Разходи за труд / курс</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% if rows and rows|length > 0 %}
+        {% for r in rows %}
+        {# данни за км и приходи #}
+        {% set planned_km = r.stats.planned_km or 0 %}
+        {% set actual_km = r.stats.actual_km or 0 %}
+        {% set real_km = actual_km %}
+
+        {% set planned_rev = r.stats.planned_revenue or 0 %}
+        {# планирани приходи / км: план / планирани км #}
+        {% set planned_rev_per_km = (planned_rev / planned_km) if planned_km > 0 else 0 %}
+        {# „реални“ приходи / км: същата цена, но върху реалните км #}
+        {% set real_rev_per_km = (planned_rev / real_km) if real_km > 0 else 0 %}
+        {% set diff_pct = ((real_rev_per_km - planned_rev_per_km) / planned_rev_per_km * 100)
+                          if planned_rev_per_km > 0 else 0 %}
+
+        {# разходи / км – върху реалните км #}
+        {% set cost_per_km = (r.stats.total_cost / real_km) if real_km > 0 else 0 %}
+
+        <tr class="border-t">
+          <td class="p-3 sticky left-0 bg-white">
+            <div class="flex items-center gap-2">
+              {% if r.inactive %}
+                <span class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200" title="Неактивен">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="12" cy="12" r="6"/>
+                  </svg>
+                  Неактивен
+                </span>
+                <span class="font-medium text-slate-400 line-through">{{ r.reg_no }}</span>
+              {% else %}
+                <span class="font-medium text-slate-900">{{ r.reg_no }}</span>
+              {% endif %}
+            </div>
+          </td>
+
+          <!-- Километри -->
+          <td class="p-3 text-right">
+            {{ '%.0f'|format(planned_km) }}
+          </td>
+          <td class="p-3 text-right {% if planned_km > 0 and actual_km < planned_km %}bg-red-50 text-red-700 font-semibold{% endif %}">
+            {{ '%.0f'|format(actual_km) }}
+          </td>
+
+          <!-- Приходи -->
+          <td class="p-3 text-right border-l">
+            {{ '%.3f'|format(planned_rev_per_km) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.3f'|format(real_rev_per_km) }}
+          </td>
+          <td class="p-3 text-right">
+            {% if planned_rev_per_km > 0 %}
+              {% if diff_pct > 0 %}
+                <span class="text-green-600 font-semibold">{{ '%+.1f'|format(diff_pct) }}%</span>
+              {% elif diff_pct < 0 %}
+                <span class="text-red-600 font-semibold">{{ '%+.1f'|format(diff_pct) }}%</span>
+              {% else %}
+                <span class="text-slate-600">{{ '%.1f'|format(diff_pct) }}%</span>
+              {% endif %}
+            {% else %}
+              <span class="text-slate-400">—</span>
+            {% endif %}
+          </td>
+
+          <!-- Разходи -->
+          <td class="p-3 text-right border-l">
+            {{ '%.2f'|format(r.stats.tech_fixed_cost_period) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.2f'|format(r.stats.service_cost_period) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.3f'|format(cost_per_km) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.2f'|format(r.stats.labor_cost_per_trip) }}
+          </td>
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td colspan="10" class="p-6 text-center text-slate-500">
+            Няма данни за показване. Проверете финансовите полета в <code>data/orders.json</code> и <code>data/driver_logs.json</code>.
+          </td>
+        </tr>
+      {% endif %}
+      </tbody>
+      <tfoot class="bg-slate-50 font-medium border-t">
+        {# засега fleet-level: ползваме totals.km и fleet.revenue_per_km / total_cost_per_km #}
+        {% set fleet_planned_km = totals.km %}
+        {% set fleet_actual_km = totals.km %}
+        {% set fleet_planned_rev_per_km = fleet.revenue_per_km %}
+        {% set fleet_real_rev_per_km = fleet.revenue_per_km %}
+        {% set fleet_diff_pct = 0 %}
+        {% set fleet_cost_per_km = fleet.total_cost_per_km %}
+        <tr>
+          <td class="p-3 sticky left-0 bg-slate-50">Флот (общо / средно)</td>
+
+          <!-- Километри -->
+          <td class="p-3 text-right">
+            {{ '%.0f'|format(fleet_planned_km) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.0f'|format(fleet_actual_km) }}
+          </td>
+
+          <!-- Приходи -->
+          <td class="p-3 text-right border-l">
+            {{ '%.3f'|format(fleet_planned_rev_per_km) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.3f'|format(fleet_real_rev_per_km) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.1f'|format(fleet_diff_pct) }}%
+          </td>
+
+          <!-- Разходи -->
+          <td class="p-3 text-right border-l">
+            {{ '%.2f'|format(fleet.maint_cost_total) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.2f'|format(fleet.service_cost_total if fleet.service_cost_total is defined else 0) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.3f'|format(fleet_cost_per_km) }}
+          </td>
+          <td class="p-3 text-right">
+            {{ '%.2f'|format(fleet.labor_cost_per_trip) }}
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</section>
+
+{% endblock %}
