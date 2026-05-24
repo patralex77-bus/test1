@@ -269,6 +269,107 @@ class AdminAssignSeatPayload(BaseModel):
     seat_no: str
 
 
+def _dashboard_virtual_passenger_id(booking_id: int, seat_index: int) -> int:
+    """
+    Отрицателен pseudo passenger id за dashboard ред, когато има BookingSeat,
+    но липсва реален TripPassenger row.
+
+    Пример: booking_id=123, seat_index=1 -> -123002
+    """
+    return -((int(booking_id) * 1000) + int(seat_index) + 1)
+
+
+def _decode_dashboard_virtual_passenger_id(value: int) -> tuple[int, int] | None:
+    """
+    Връща (booking_id, seat_index) за отрицателен pseudo id.
+    """
+    try:
+        raw = abs(int(value))
+    except Exception:
+        return None
+
+    if raw < 1001:
+        return None
+
+    booking_id = raw // 1000
+    seat_pos = raw % 1000
+    if booking_id <= 0 or seat_pos <= 0:
+        return None
+
+    return booking_id, seat_pos - 1
+
+
+def _assign_dashboard_virtual_booking_seat(
+    db: Session,
+    booking_id: int,
+    seat_index: int,
+    seat_no: str,
+) -> dict:
+    """
+    Позволява бутонът „Смени място“ да работи и за synthetic dashboard редове.
+    Това са случаи, в които booking има места/qty, но няма достатъчно TripPassenger rows.
+    """
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if not re.fullmatch(r"\d{1,2}", seat_no):
+        raise HTTPException(status_code=400, detail="Invalid seat number")
+
+    resolved_trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
+    if resolved_trip_id:
+        booking.trip_id = resolved_trip_id
+
+    if not _ensure_booking_has_service(db, booking):
+        raise HTTPException(status_code=400, detail="Booking has no trip/service")
+
+    allowed = set(_service_default_seat_map(booking))
+    if seat_no not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid seat number")
+
+    required_count = max(_booking_passenger_count(db, booking), int(seat_index) + 1, 1)
+    rows = _ensure_booking_seat_rows(db, booking, required_count)
+    rows = sorted(rows, key=lambda r: int(getattr(r, "id", 0) or 0))
+
+    # Проверка срещу други bookings в същия service.
+    taken_by_others = _service_taken_seats(db, booking, exclude_booking_id=booking.id)
+    if seat_no in taken_by_others:
+        raise HTTPException(status_code=409, detail="Seat already taken")
+
+    # Проверка срещу други места в същия booking.
+    for idx, row in enumerate(rows):
+        if idx == seat_index:
+            continue
+        existing = str(getattr(row, "seat_no", None) or "").strip()
+        if existing and existing == seat_no:
+            raise HTTPException(status_code=409, detail="Seat already taken")
+
+    target = rows[seat_index]
+    target.trip_id = getattr(booking, "trip_id", None)
+    target.seat_no = seat_no
+    target.is_final = True
+    target.selection_mode = "admin_dashboard"
+
+    normalized_seats: list[str] = []
+    for row in rows:
+        s = str(getattr(row, "seat_no", None) or "").strip()
+        if s and s not in normalized_seats:
+            normalized_seats.append(s)
+
+    _sync_booking_seats_to_trip_passengers(db, booking.id, normalized_seats)
+    db.commit()
+
+    return {
+        "ok": True,
+        "passenger_id": _dashboard_virtual_passenger_id(booking.id, seat_index),
+        "booking_id": booking.id,
+        "seat_index": seat_index,
+        "seat_no": seat_no,
+        "seat_locked_by_admin": False,
+        "virtual": True,
+    }
+
+
 @app.post("/admin/passengers/{passenger_id}/assign-seat")
 def admin_assign_passenger_seat(
     passenger_id: int,
@@ -280,13 +381,22 @@ def admin_assign_passenger_seat(
     if r:
         raise HTTPException(status_code=403, detail="Admin only")
 
-    passenger = db.query(TripPassenger).filter(TripPassenger.id == passenger_id).first()
-    if not passenger:
-        raise HTTPException(status_code=404, detail="Passenger not found")
-
     seat_no = (payload.seat_no or "").strip()
     if not re.fullmatch(r"\d{1,2}", seat_no):
         raise HTTPException(status_code=400, detail="Invalid seat number")
+
+    # Negative IDs are synthetic dashboard rows for bookings that have seat/qty,
+    # but do not yet have a corresponding TripPassenger row.
+    if int(passenger_id) < 0:
+        decoded = _decode_dashboard_virtual_passenger_id(passenger_id)
+        if not decoded:
+            raise HTTPException(status_code=404, detail="Passenger not found")
+        booking_id, seat_index = decoded
+        return _assign_dashboard_virtual_booking_seat(db, booking_id, seat_index, seat_no)
+
+    passenger = db.query(TripPassenger).filter(TripPassenger.id == passenger_id).first()
+    if not passenger:
+        raise HTTPException(status_code=404, detail="Passenger not found")
 
     trip_id = getattr(passenger, "trip_id", None)
 
@@ -553,6 +663,7 @@ def _build_dashboard_direction_payload(
     taken_seats = set(str(x).strip() for x in (extra_taken_seats or []) if str(x).strip())
     passengers_payload: list[dict] = []
     represented_booking_ids: set[int] = set()
+    represented_count_by_booking_id: dict[int, int] = {}
     booking_confirmed_total = 0
 
     def _split_name_parts(full_name: str) -> tuple[str | None, str | None]:
@@ -564,14 +675,44 @@ def _build_dashboard_direction_payload(
             return parts[0], None
         return parts[0], parts[1]
 
+    booking_by_id_for_dashboard: dict[int, Booking] = {}
+    booking_by_external_id_for_dashboard: dict[str, Booking] = {}
+    for booking in items or []:
+        bid = getattr(booking, "id", None)
+        if bid is not None:
+            booking_by_id_for_dashboard[int(bid)] = booking
+
+        ext_key = _booking_external_id_key(booking)
+        if ext_key and ext_key not in booking_by_external_id_for_dashboard:
+            booking_by_external_id_for_dashboard[ext_key] = booking
+
     for p in sorted(list(trip_passengers or []), key=_trip_passenger_sort_key):
         seat_no = _effective_trip_passenger_seat(p)
         if seat_no:
             taken_seats.add(seat_no)
 
         booking_id = getattr(p, "booking_id", None)
+        effective_booking_id_for_count = None
+
         if booking_id is not None:
-            represented_booking_ids.add(int(booking_id))
+            effective_booking_id_for_count = int(booking_id)
+        else:
+            # Ако TripPassenger редът още не е linked с booking_id,
+            # броим го към booking-а чрез external_id, за да не създаваме
+            # duplicate synthetic ред в dashboard.
+            p_ext_key = _trip_passenger_external_id_key(
+                p,
+                booking_by_id=booking_by_id_for_dashboard,
+            )
+            matched_booking = booking_by_external_id_for_dashboard.get(p_ext_key or "")
+            if matched_booking and getattr(matched_booking, "id", None) is not None:
+                effective_booking_id_for_count = int(matched_booking.id)
+
+        if effective_booking_id_for_count is not None:
+            represented_booking_ids.add(effective_booking_id_for_count)
+            represented_count_by_booking_id[effective_booking_id_for_count] = (
+                represented_count_by_booking_id.get(effective_booking_id_for_count, 0) + 1
+            )
 
         full_name = _effective_text(
             getattr(p, "manual_full_name", None),
@@ -603,16 +744,57 @@ def _build_dashboard_direction_payload(
 
     for booking in items or []:
         booking_id = getattr(booking, "id", None)
+        booking_id_int = int(booking_id or 0)
         booking_pax_count = max(1, int(getattr(booking, "_dashboard_passenger_count", 0) or 1))
         booking_confirmed_total += booking_pax_count
 
-        for seat_no in list(getattr(booking, "_dashboard_final_seats", None) or _booking_selected_seats(booking) or []):
-            seat_str = str(seat_no or "").strip()
-            if seat_str:
-                taken_seats.add(seat_str)
+        final_seats = [
+            str(x or "").strip()
+            for x in list(getattr(booking, "_dashboard_final_seats", None) or _booking_selected_seats(booking) or [])
+            if str(x or "").strip()
+        ]
 
-        if booking_id is not None and int(booking_id) in represented_booking_ids:
+        for seat_str in final_seats:
+            taken_seats.add(seat_str)
+
+        if not booking_id_int:
             continue
+
+        represented_count = int(represented_count_by_booking_id.get(booking_id_int, 0) or 0)
+        missing_count = max(0, booking_pax_count - represented_count)
+        if missing_count <= 0:
+            continue
+
+        # Ако booking има места/qty, но няма достатъчно TripPassenger rows,
+        # показваме synthetic редове в dashboard Passengers. Така Seat Map и
+        # Passengers таблицата не се разминават. ID-то е отрицателно и route-ът
+        # /admin/passengers/{id}/assign-seat го обработва като booking-seat ред.
+        booking_first_name = getattr(booking, "first_name", None)
+        booking_last_name = getattr(booking, "last_name", None)
+        base_name = f"{booking_first_name or ''} {booking_last_name or ''}".strip() or "—"
+        booking_phone = str(getattr(booking, "phone", None) or "").strip() or None
+
+        for offset in range(missing_count):
+            passenger_index = represented_count + offset
+            seat_no = final_seats[passenger_index] if passenger_index < len(final_seats) else None
+
+            display_last_name = booking_last_name
+            passenger_name = base_name
+            if booking_pax_count > 1:
+                passenger_name = f"{base_name} ({passenger_index + 1})"
+
+            passengers_payload.append({
+                "id": _dashboard_virtual_passenger_id(booking_id_int, passenger_index),
+                "virtual": True,
+                "trip_id": getattr(booking, "trip_id", None),
+                "booking_id": booking_id_int,
+                "first_name": booking_first_name,
+                "last_name": display_last_name,
+                "passenger_name": passenger_name,
+                "phone": booking_phone,
+                "seat_no": seat_no or None,
+                "seat_locked_by_admin": False,
+            })
 
     if total_confirmed is None:
         total_confirmed = max(booking_confirmed_total, len(passengers_payload))
