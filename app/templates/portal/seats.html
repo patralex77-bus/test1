@@ -323,7 +323,7 @@
   }
 
   let selectedSeats = normalizeSeatList({{ selected_seats | tojson }});
-  let takenSeats = normalizeSeatList({{ taken_seats | tojson }});
+  let takenSeats = normalizeSeatList({{ taken_seats | list | tojson }});
 
   const seatButtons = Array.from(document.querySelectorAll(".seat-btn"));
   const selectedSeatsWrap = document.getElementById("selectedSeatsWrap");

@@ -385,55 +385,140 @@ def admin_assign_passenger_seat(
     if not re.fullmatch(r"\d{1,2}", seat_no):
         raise HTTPException(status_code=400, detail="Invalid seat number")
 
-    # Negative IDs are synthetic dashboard rows for bookings that have seat/qty,
-    # but do not yet have a corresponding TripPassenger row.
+    # Negative IDs са synthetic dashboard rows за bookings,
+    # които имат BookingSeat/qty, но нямат достатъчно TripPassenger rows.
     if int(passenger_id) < 0:
         decoded = _decode_dashboard_virtual_passenger_id(passenger_id)
         if not decoded:
             raise HTTPException(status_code=404, detail="Passenger not found")
+
         booking_id, seat_index = decoded
-        return _assign_dashboard_virtual_booking_seat(db, booking_id, seat_index, seat_no)
+        return _assign_dashboard_virtual_booking_seat(
+            db=db,
+            booking_id=booking_id,
+            seat_index=seat_index,
+            seat_no=seat_no,
+        )
 
     passenger = db.query(TripPassenger).filter(TripPassenger.id == passenger_id).first()
     if not passenger:
         raise HTTPException(status_code=404, detail="Passenger not found")
 
-    trip_id = getattr(passenger, "trip_id", None)
-
-    if not trip_id and getattr(passenger, "booking_id", None):
+    booking = None
+    if getattr(passenger, "booking_id", None):
         booking = (
             db.query(Booking)
             .filter(Booking.id == passenger.booking_id)
             .first()
         )
 
-        if booking:
-            trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
+    trip_id = getattr(passenger, "trip_id", None)
 
-            if trip_id:
-                passenger.trip_id = trip_id
-                db.flush()
+    if booking:
+        resolved_trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
+        if resolved_trip_id:
+            booking.trip_id = resolved_trip_id
+            passenger.trip_id = resolved_trip_id
+            trip_id = resolved_trip_id
+            db.flush()
 
     if not trip_id:
         raise HTTPException(status_code=400, detail="Passenger has no trip")
 
-    others = (
-        db.query(TripPassenger)
-        .filter(TripPassenger.trip_id == trip_id)
-        .filter(TripPassenger.id != passenger.id)
-        .all()
-    )
+    # 1) Проверка дали мястото е валидно за layout-а.
+    allowed = set(_service_default_seat_map(booking))
+    if seat_no not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid seat number")
 
-    for other in others:
-        other_effective_seat = str(
-            getattr(other, "manual_seat_no", None)
-            or getattr(other, "seat_no", None)
-            or ""
-        ).strip()
+    # 2) Проверка срещу други bookings в същия service/trip.
+    # Това е важно за portal Seat Map, защото BookingSeat може да има заето място,
+    # дори TripPassenger редът да липсва или да не е linked.
+    if booking:
+        taken_by_other_bookings = _service_taken_seats(
+            db=db,
+            booking=booking,
+            exclude_booking_id=booking.id,
+        )
 
-        if other_effective_seat == seat_no:
+        if seat_no in taken_by_other_bookings:
             raise HTTPException(status_code=409, detail="Seat already taken")
 
+        # 3) Проверка срещу други пътници в същия booking.
+        same_booking_passengers = (
+            db.query(TripPassenger)
+            .filter(TripPassenger.booking_id == booking.id)
+            .filter(TripPassenger.id != passenger.id)
+            .all()
+        )
+
+        for other in same_booking_passengers:
+            other_seat = _effective_trip_passenger_seat(other)
+            if other_seat == seat_no:
+                raise HTTPException(status_code=409, detail="Seat already taken")
+
+        # 4) Проверка срещу други BookingSeat редове в същия booking.
+        booking_seat_rows = (
+            db.query(BookingSeat)
+            .filter(
+                BookingSeat.booking_id == booking.id,
+                BookingSeat.is_final == True,
+                BookingSeat.seat_no.isnot(None),
+            )
+            .order_by(BookingSeat.id.asc())
+            .all()
+        )
+
+        linked_passengers = (
+            db.query(TripPassenger)
+            .filter(TripPassenger.booking_id == booking.id)
+            .order_by(TripPassenger.id.asc())
+            .all()
+        )
+        linked_passengers = sorted(linked_passengers, key=_trip_passenger_sort_key)
+
+        passenger_index = 0
+        for idx, p in enumerate(linked_passengers):
+            if int(getattr(p, "id", 0) or 0) == int(passenger.id):
+                passenger_index = idx
+                break
+
+        for idx, row in enumerate(booking_seat_rows):
+            if idx == passenger_index:
+                continue
+
+            row_seat = str(getattr(row, "seat_no", None) or "").strip()
+            if row_seat == seat_no:
+                raise HTTPException(status_code=409, detail="Seat already taken")
+
+    else:
+        # Fallback за passenger без booking_id:
+        # гледаме TripPassenger + BookingSeat директно по trip_id.
+        other_passengers = (
+            db.query(TripPassenger)
+            .filter(TripPassenger.trip_id == trip_id)
+            .filter(TripPassenger.id != passenger.id)
+            .all()
+        )
+
+        for other in other_passengers:
+            other_seat = _effective_trip_passenger_seat(other)
+            if other_seat == seat_no:
+                raise HTTPException(status_code=409, detail="Seat already taken")
+
+        other_booking_seats = (
+            db.query(BookingSeat)
+            .filter(
+                BookingSeat.trip_id == trip_id,
+                BookingSeat.is_final == True,
+                BookingSeat.seat_no == seat_no,
+            )
+            .all()
+        )
+
+        if other_booking_seats:
+            raise HTTPException(status_code=409, detail="Seat already taken")
+
+    # 5) Запис в TripPassenger.
     if hasattr(passenger, "manual_seat_no"):
         passenger.manual_seat_no = seat_no
     else:
@@ -442,10 +527,9 @@ def admin_assign_passenger_seat(
     if hasattr(passenger, "seat_locked_by_admin"):
         passenger.seat_locked_by_admin = True
 
-    # ВАЖНО:
-    # Админ промяната вече се записва и в BookingSeat,
-    # за да може portal Seat Map / ticket / booking final seats да виждат същото място.
-    if getattr(passenger, "booking_id", None):
+    # 6) ВАЖНО:
+    # Синхронизация към BookingSeat, за да вижда portal Seat Map актуалното място.
+    if booking:
         _sync_admin_passenger_seat_to_booking_seat(
             db=db,
             passenger=passenger,
@@ -2159,18 +2243,14 @@ def _sync_admin_passenger_seat_to_booking_seat(
     Когато админ сменя място директно върху TripPassenger,
     синхронизираме и BookingSeat row-а.
 
-    Без това:
-      - admin dashboard вижда мястото
-      - Seat Map го вижда частично
-      - portal / ticket / booking final seats може да останат стари
+    Така:
+      - admin dashboard
+      - BookingSeat final seats
+      - portal /portal/seats/state
+      - portal ticket
+      - passenger Seat Map
 
-    С това:
-      - TripPassenger.manual_seat_no
-      - BookingSeat.seat_no
-      - portal seat state
-      - ticket seat logic
-
-    остават в синхрон.
+    виждат едно и също място.
     """
     booking_id = getattr(passenger, "booking_id", None)
     if not booking_id:
@@ -2196,7 +2276,6 @@ def _sync_admin_passenger_seat_to_booking_seat(
         .order_by(TripPassenger.id.asc())
         .all()
     )
-
     linked_passengers = sorted(linked_passengers, key=_trip_passenger_sort_key)
 
     passenger_index = 0
@@ -2215,14 +2294,15 @@ def _sync_admin_passenger_seat_to_booking_seat(
     rows = _ensure_booking_seat_rows(db, booking, required_count)
     rows = sorted(rows, key=lambda r: int(getattr(r, "id", 0) or 0))
 
+    # Записваме конкретното място на конкретния пътник в съответния BookingSeat index.
     target_row = rows[passenger_index]
     target_row.trip_id = resolved_trip_id
     target_row.seat_no = str(seat_no or "").strip() or None
     target_row.is_final = bool(target_row.seat_no)
     target_row.selection_mode = "admin_dashboard"
 
-    # Ако има linked passengers със seats, пазим ги синхронизирани към BookingSeat.
-    # Това НЕ трие други съществуващи seat rows, а само допълва/поправя съответните индекси.
+    # Допълнително синхронизираме всички linked passengers,
+    # за да няма разминаване между TripPassenger и BookingSeat.
     for idx, p in enumerate(linked_passengers):
         if idx >= len(rows):
             break
@@ -2373,15 +2453,14 @@ def _service_taken_seats(
     """
     Взима всички заети места за същия service/trip.
 
-    ВАЖНО:
     Комбинира:
-      1) BookingSeat final seats - portal/admin booking seat rows
-      2) TripPassenger effective seats - manual_seat_no/seat_no от admin dashboard
+      1) BookingSeat final seats
+      2) TripPassenger effective seats: manual_seat_no / seat_no
 
-    Това оправя проблема:
-    - админът сменя място в Dashboard чрез TripPassenger.manual_seat_no
-    - portal/seats/state вече вижда тази промяна
-    - Seat Map refresh показва новото заето място веднага
+    Това е критично за portal Seat Map:
+      - ако админ смени място от dashboard, то влиза в TripPassenger.manual_seat_no
+      - после се синхронизира към BookingSeat
+      - Seat Map трябва да вижда и двата източника
     """
     if not booking:
         return set()
@@ -2402,7 +2481,6 @@ def _service_taken_seats(
         return set()
 
     taken: set[str] = set()
-
     current_external_id = _booking_external_id_key(booking)
 
     # -------------------------------------------------------
@@ -2451,7 +2529,7 @@ def _service_taken_seats(
             taken.add(seat_no)
 
     # -------------------------------------------------------
-    # 2) TripPassenger seats from admin/manual dashboard
+    # 2) TripPassenger seats от admin/manual dashboard
     # -------------------------------------------------------
     passenger_rows: list[TripPassenger] = []
 
@@ -2462,7 +2540,6 @@ def _service_taken_seats(
             .all()
         )
     else:
-        # Legacy fallback: passengers linked to bookings in same service
         linked_rows = (
             db.query(TripPassenger, Booking)
             .join(Booking, Booking.id == TripPassenger.booking_id)
@@ -2522,6 +2599,7 @@ def _service_taken_seats(
             taken.add(seat_no)
 
     return taken
+
 
 def _ensure_booking_has_service(db_or_booking, booking: Booking | None = None) -> bool:
     """
