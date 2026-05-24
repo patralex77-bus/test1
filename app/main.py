@@ -5703,7 +5703,11 @@ def admin_booking_detail_page(
 
     dispatch_hours_left = _dispatch_hours_until_departure(db, booking)
     dispatch_can_assign_seat = _can_dispatch_assign_cash_seat(db, booking)
-    dispatch_taken_seats = _service_taken_seats(db, booking, exclude_booking_id=booking.id) if _ensure_booking_has_service(booking) else set()
+    dispatch_taken_seats_raw = _service_taken_seats(db, booking, exclude_booking_id=booking.id) if _ensure_booking_has_service(booking) else set()
+    dispatch_taken_seats = sorted(
+        [str(x).strip() for x in dispatch_taken_seats_raw if str(x).strip()],
+        key=_seat_sort_key,
+    )
     dispatch_all_seats = _service_default_seat_map(booking) if _ensure_booking_has_service(booking) else []
     dispatch_departure_dt = _booking_departure_dt_for_dispatch(db, booking)
 
@@ -6229,7 +6233,11 @@ def portal_seats_page(request: Request, db: Session = Depends(get_db)):
     if selected_seats and not _can_portal_change_seat(booking):
         return RedirectResponse(url="/portal?seat_err=change_locked", status_code=303)
 
-    taken_seats = _service_taken_seats(db, booking, exclude_booking_id=booking.id)
+    taken_seats_raw = _service_taken_seats(db, booking, exclude_booking_id=booking.id)
+    taken_seats = sorted(
+        [str(x).strip() for x in taken_seats_raw if str(x).strip()],
+        key=_seat_sort_key,
+    )
     all_seats = _service_default_seat_map(booking)
 
     return templates.TemplateResponse(
@@ -6247,6 +6255,101 @@ def portal_seats_page(request: Request, db: Session = Depends(get_db)):
             "seat_ok": request.query_params.get("seat_ok", ""),
         },
     )
+
+
+@app.get("/portal/seats/state")
+def portal_seats_state(request: Request, db: Session = Depends(get_db)):
+    booking, redirect_resp = _portal_booking_or_redirect(request, db)
+    if redirect_resp:
+        raise HTTPException(status_code=401, detail="Portal login required")
+
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        raise HTTPException(status_code=403, detail="Booking is cancelled or pending cancellation")
+
+    if _norm_payment_method(booking.payment_method) not in {"bank", "paypal"}:
+        raise HTTPException(status_code=403, detail="Seat selection is not available for this payment method")
+
+    if booking.payment_status != "paid":
+        raise HTTPException(status_code=403, detail="Payment is not approved")
+
+    if not _ensure_booking_has_service(booking):
+        raise HTTPException(status_code=403, detail="Booking has no service/trip")
+
+    taken_seats_raw = _service_taken_seats(db, booking, exclude_booking_id=booking.id)
+    taken_seats = sorted(
+        [str(x).strip() for x in taken_seats_raw if str(x).strip()],
+        key=_seat_sort_key,
+    )
+
+    return {
+        "ok": True,
+        "taken_seats": taken_seats,
+        "selected_seats": _booking_selected_seats(booking),
+        "passenger_count": _booking_passenger_count(db, booking),
+    }
+
+
+@app.post("/portal/seats/assign")
+async def portal_assign_seats(request: Request, db: Session = Depends(get_db)):
+    booking, redirect_resp = _portal_booking_or_redirect(request, db)
+    if redirect_resp:
+        return redirect_resp
+
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return RedirectResponse(url="/portal?seat_err=cancelled", status_code=303)
+
+    if _norm_payment_method(booking.payment_method) not in {"bank", "paypal"}:
+        return RedirectResponse(url="/portal?seat_err=payment_method", status_code=303)
+
+    if booking.payment_status != "paid":
+        return RedirectResponse(url="/portal?seat_err=payment", status_code=303)
+
+    if not _ensure_booking_has_service(booking):
+        return RedirectResponse(url="/portal?seat_err=service", status_code=303)
+
+    if _booking_has_admin_locked_seat(db, booking):
+        return RedirectResponse(url="/portal?seat_err=change_locked", status_code=303)
+
+    selected_seats = _booking_selected_seats(booking)
+    passenger_count = _booking_passenger_count(db, booking)
+
+    if selected_seats and not _can_portal_change_seat(booking):
+        return RedirectResponse(url="/portal?seat_err=change_locked", status_code=303)
+
+    form = await request.form()
+    raw_seat_nos = form.getlist("seat_nos")
+
+    seat_nos: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_seat_nos:
+        seat_no = str(raw or "").strip()
+        if not seat_no or seat_no in seen:
+            continue
+        seen.add(seat_no)
+        seat_nos.append(seat_no)
+
+    if len(seat_nos) != passenger_count:
+        return RedirectResponse(url="/portal/seats?seat_err=missing", status_code=303)
+
+    allowed = set(_service_default_seat_map(booking))
+    if any(seat_no not in allowed for seat_no in seat_nos):
+        return RedirectResponse(url="/portal/seats?seat_err=invalid", status_code=303)
+
+    taken_seats = _service_taken_seats(db, booking, exclude_booking_id=booking.id)
+    if any(seat_no in taken_seats for seat_no in seat_nos):
+        return RedirectResponse(url="/portal/seats?seat_err=taken", status_code=303)
+
+    _apply_booking_seat_assignment(
+        db=db,
+        booking=booking,
+        seat_nos=seat_nos,
+        selection_mode="manual",
+    )
+
+    db.commit()
+
+    return RedirectResponse(url="/portal/seats?seat_ok=assigned", status_code=303)
+
 
 @app.post("/portal/seats/select")
 def portal_select_seat(

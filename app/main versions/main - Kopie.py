@@ -28,6 +28,8 @@ from app.services.booking_matcher import rematch_booking_to_trip
 from app.services.booking_sync import sync_booking_to_trip_passengers_by_id
 from app.services.booking_import_runner import run_booking_import
 
+from app.i18n import TRANSLATIONS
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
@@ -88,6 +90,51 @@ ADMIN_PASSWORD1 = os.environ.get("ADMIN_PASSWORD1", "").strip()
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 
+
+SUPPORTED_LANGS = {"uk", "en"}
+DEFAULT_LANG = "uk"
+
+
+def _normalize_lang(value: str | None) -> str:
+    lang = (value or "").strip().lower()
+    return lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
+
+
+def _get_lang(request: Request | None = None) -> str:
+    if request is None:
+        return DEFAULT_LANG
+
+    try:
+        return _normalize_lang(request.session.get("lang"))
+    except Exception:
+        return DEFAULT_LANG
+
+
+def _set_lang(request: Request, lang: str | None) -> None:
+    request.session["lang"] = _normalize_lang(lang)
+
+
+def _t(request: Request | None, key: str, default: str | None = None, **kwargs) -> str:
+    lang = _get_lang(request)
+    text = (
+        TRANSLATIONS.get(lang, {}).get(key)
+        or TRANSLATIONS.get(DEFAULT_LANG, {}).get(key)
+        or default
+        or key
+    )
+
+    if kwargs:
+        try:
+            text = str(text).format(**kwargs)
+        except Exception:
+            pass
+
+    return text
+
+
+templates.env.globals["t"] = _t
+templates.env.globals["get_lang"] = _get_lang
+templates.env.globals["current_lang"] = _get_lang
 
 SEAT_LAYOUT = [
     [49, 45, 41, 37, 33, 29, 25, 23, 21, 17, 13, 9, 5, 1],
@@ -754,21 +801,7 @@ def admin_assign_passenger_seat(
             raise HTTPException(status_code=409, detail="Seat already taken")
 
     passenger.manual_seat_no = seat_no
-    if hasattr(passenger, "seat_locked_by_admin"):
-        passenger.seat_locked_by_admin = True
-
-    booking = None
-    booking_id = getattr(passenger, "booking_id", None)
-    if booking_id:
-        booking = db.query(Booking).filter(Booking.id == booking_id).first()
-
-    if booking:
-        _set_booking_trip_passengers_admin_seat_lock(db, booking.id, True)
-        _sync_effective_trip_passenger_seats_to_booking(
-            db=db,
-            booking=booking,
-            selection_mode="admin_locked",
-        )
+    passenger.seat_locked_by_admin = True
 
     db.commit()
 
@@ -783,6 +816,193 @@ def admin_assign_passenger_seat(
 
 def _effective_trip_passenger_seat(p: TripPassenger) -> str:
     return str(getattr(p, "manual_seat_no", None) or getattr(p, "seat_no", None) or "").strip()
+
+
+def _empty_dashboard_direction_payload(label: str = "—", key: str = "") -> dict:
+    return {
+        "present": False,
+        "key": key,
+        "label": label,
+        "issue_count": 0,
+        "booking_count": 0,
+        "total_confirmed": 0,
+        "bank_paypal_missing_proof_le72": [],
+        "bank_paypal_missing_proof_gt72": [],
+        "cash_not_confirmed_le72": [],
+        "cash_not_confirmed_gt72": [],
+        "dispatcher_seat_assignment_needed": [],
+        "taken_seats": [],
+        "passengers": [],
+    }
+
+
+def _dashboard_booking_base_date(booking: Booking, trip_by_id: dict[int, Trip] | None = None) -> date | None:
+    booking_date = getattr(booking, "booking_date", None)
+    if booking_date:
+        if isinstance(booking_date, datetime):
+            return booking_date.date()
+        if isinstance(booking_date, date):
+            return booking_date
+        try:
+            return datetime.fromisoformat(str(booking_date)).date()
+        except Exception:
+            pass
+
+    dep_dt = _booking_departure_dt_for_dispatch(None, booking)
+    if dep_dt:
+        return dep_dt.date()
+
+    trip_id = getattr(booking, "trip_id", None)
+    if trip_id and trip_by_id:
+        trip = trip_by_id.get(int(trip_id))
+        if trip and getattr(trip, "date_time", None):
+            try:
+                return trip.date_time.date()
+            except Exception:
+                pass
+
+    return None
+
+
+def _dashboard_trip_base_date(trip: Trip | None) -> date | None:
+    if not trip or not getattr(trip, "date_time", None):
+        return None
+    try:
+        return trip.date_time.date()
+    except Exception:
+        return None
+
+
+def _dashboard_stop_country_group(value: str | None) -> str | None:
+    key = _norm_stop_key(value)
+    if not key:
+        return None
+
+    ua_keys = {"kyiv", "zhytomyr", "rivne", "lviv"}
+    at_keys = {
+        "wien", "stpolten", "linz", "wels", "salzburg",
+        "innsbruck", "bruck", "graz", "klagenfurt", "villach",
+    }
+
+    if key in ua_keys:
+        return "UA"
+    if key in at_keys:
+        return "AT"
+    return None
+
+
+def _dashboard_direction_meta_from_values(from_value: str | None, to_value: str | None) -> dict:
+    from_meta = _stop_meta(from_value)
+    to_meta = _stop_meta(to_value)
+
+    from_key = (from_meta.get("key") or _norm_service_part(from_value) or "unknown_from").strip()
+    to_key = (to_meta.get("key") or _norm_service_part(to_value) or "unknown_to").strip()
+    from_label = (from_meta.get("label") or (from_value or "—")).strip() or "—"
+    to_label = (to_meta.get("label") or (to_value or "—")).strip() or "—"
+
+    from_group = _dashboard_stop_country_group(from_value)
+    to_group = _dashboard_stop_country_group(to_value)
+
+    if from_group == "AT" and to_group == "UA":
+        return {
+            "key": "AT->UA",
+            "label": "AT → UA",
+            "country_from": from_group,
+            "country_to": to_group,
+            "from_key": from_key,
+            "to_key": to_key,
+        }
+
+    if from_group == "UA" and to_group == "AT":
+        return {
+            "key": "UA->AT",
+            "label": "UA → AT",
+            "country_from": from_group,
+            "country_to": to_group,
+            "from_key": from_key,
+            "to_key": to_key,
+        }
+
+    return {
+        "key": f"{from_key}->{to_key}",
+        "label": f"{from_label} → {to_label}",
+        "country_from": from_group,
+        "country_to": to_group,
+        "from_key": from_key,
+        "to_key": to_key,
+    }
+
+
+def _dashboard_direction_meta_for_trip(trip: Trip | None) -> dict:
+    if not trip:
+        return _dashboard_direction_meta_from_values(None, None)
+
+    return _dashboard_direction_meta_from_values(
+        getattr(trip, "route_from", None),
+        getattr(trip, "route_to", None),
+    )
+
+
+def _dashboard_direction_meta_for_booking(booking: Booking, trip_by_id: dict[int, Trip] | None = None) -> dict:
+    trip_id = getattr(booking, "trip_id", None)
+    if trip_id and trip_by_id:
+        trip = trip_by_id.get(int(trip_id))
+        if trip and (getattr(trip, "route_from", None) or getattr(trip, "route_to", None)):
+            return _dashboard_direction_meta_for_trip(trip)
+
+    candidates = [
+        (getattr(booking, "route_from", None), getattr(booking, "route_to", None)),
+        (getattr(booking, "bus_from", None), getattr(booking, "bus_to", None)),
+    ]
+
+    for from_value, to_value in candidates:
+        if str(from_value or "").strip() and str(to_value or "").strip():
+            return _dashboard_direction_meta_from_values(from_value, to_value)
+
+    return _dashboard_direction_meta_from_values(
+        getattr(booking, "route_from", None) or getattr(booking, "bus_from", None),
+        getattr(booking, "route_to", None) or getattr(booking, "bus_to", None),
+    )
+
+
+def _dashboard_direction_sort_key(item: dict) -> tuple:
+    key = str(item.get("key") or "")
+    if key == "AT->UA":
+        group_order = 0
+    elif key == "UA->AT":
+        group_order = 1
+    else:
+        group_order = 2
+
+    return (group_order, str(item.get("label") or "").lower(), key.lower())
+
+
+def _get_booking_trip_passengers_for_seat_control(db: Session, booking: Booking) -> list[TripPassenger]:
+    passengers = (
+        db.query(TripPassenger)
+        .filter(TripPassenger.booking_id == booking.id)
+        .order_by(TripPassenger.id.asc())
+        .all()
+    )
+    return sorted(passengers, key=_trip_passenger_sort_key)
+
+
+def _booking_has_admin_locked_seat(db: Session, booking: Booking) -> bool:
+    passengers = _get_booking_trip_passengers_for_seat_control(db, booking)
+    return any(bool(getattr(p, "seat_locked_by_admin", False)) for p in passengers)
+
+
+def _set_booking_trip_passengers_admin_seat_lock(db: Session, booking_id: int, is_locked: bool = True) -> None:
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        return
+
+    passengers = _get_booking_trip_passengers_for_seat_control(db, booking)
+    for p in passengers:
+        if hasattr(p, "seat_locked_by_admin"):
+            p.seat_locked_by_admin = bool(is_locked)
+        if getattr(p, "booking_id", None) is None:
+            p.booking_id = booking.id
 
 
 def _build_dashboard_direction_payload(
@@ -801,6 +1021,11 @@ def _build_dashboard_direction_payload(
     bank_paypal_missing_proof_gt72 = bank_paypal_missing_proof_gt72 or []
     cash_not_confirmed_gt72 = cash_not_confirmed_gt72 or []
 
+    taken_seats = set(str(x).strip() for x in (extra_taken_seats or []) if str(x).strip())
+    passengers_payload: list[dict] = []
+    represented_booking_ids: set[int] = set()
+    booking_confirmed_total = 0
+
     def _split_name_parts(full_name: str) -> tuple[str | None, str | None]:
         full_name = (full_name or "").strip()
         if not full_name:
@@ -810,13 +1035,14 @@ def _build_dashboard_direction_payload(
             return parts[0], None
         return parts[0], parts[1]
 
-    taken_seats = set(str(x).strip() for x in (extra_taken_seats or []) if str(x).strip())
-    passengers_payload = []
-
     for p in sorted(list(trip_passengers or []), key=_trip_passenger_sort_key):
         seat_no = _effective_trip_passenger_seat(p)
         if seat_no:
             taken_seats.add(seat_no)
+
+        booking_id = getattr(p, "booking_id", None)
+        if booking_id is not None:
+            represented_booking_ids.add(int(booking_id))
 
         full_name = _effective_text(
             getattr(p, "manual_full_name", None),
@@ -825,7 +1051,6 @@ def _build_dashboard_direction_payload(
 
         first_name = getattr(p, "first_name", None)
         last_name = getattr(p, "last_name", None)
-
         if not (first_name or last_name):
             first_name, last_name = _split_name_parts(full_name)
 
@@ -847,8 +1072,21 @@ def _build_dashboard_direction_payload(
             "seat_locked_by_admin": bool(getattr(p, "seat_locked_by_admin", False)),
         })
 
+    for booking in items or []:
+        booking_id = getattr(booking, "id", None)
+        booking_pax_count = max(1, int(getattr(booking, "_dashboard_passenger_count", 0) or 1))
+        booking_confirmed_total += booking_pax_count
+
+        for seat_no in list(getattr(booking, "_dashboard_final_seats", None) or _booking_selected_seats(booking) or []):
+            seat_str = str(seat_no or "").strip()
+            if seat_str:
+                taken_seats.add(seat_str)
+
+        if booking_id is not None and int(booking_id) in represented_booking_ids:
+            continue
+
     if total_confirmed is None:
-        total_confirmed = len(passengers_payload) if passengers_payload else len(items or [])
+        total_confirmed = max(booking_confirmed_total, len(passengers_payload))
 
     actionable_issue_count = (
         len(bank_paypal_missing_proof_le72)
@@ -864,6 +1102,7 @@ def _build_dashboard_direction_payload(
         "present": True,
         "label": label,
         "issue_count": actionable_issue_count,
+        "booking_count": int(len(items or [])),
         "bank_paypal_missing_proof_le72": bank_paypal_missing_proof_le72,
         "bank_paypal_missing_proof_gt72": bank_paypal_missing_proof_gt72,
         "cash_not_confirmed_le72": cash_not_confirmed_le72,
@@ -874,9 +1113,6 @@ def _build_dashboard_direction_payload(
         "passengers": passengers_payload,
     }
 
-# =======================
-# QR Payment
-# =======================
 # =======================
 # QR Payment
 # =======================
@@ -968,6 +1204,208 @@ def _portal_ticket_qr_svg_response(
         content=svg_bytes,
         media_type="image/svg+xml",
         headers=headers,
+    )
+
+
+
+def _booking_is_cancelled_or_pending_cancellation(booking: Booking | None) -> bool:
+    if not booking:
+        return False
+
+    status = str(getattr(booking, "booking_status", None) or "").strip().lower()
+    return status in {"cancelled", "cancellation_requested"}
+
+
+def _split_customer_name_for_booking_edit(value: str) -> tuple[str | None, str | None]:
+    raw = (value or "").strip()
+    if not raw:
+        return None, None
+
+    parts = raw.split()
+    if len(parts) == 1:
+        return parts[0], None
+
+    return parts[0], " ".join(parts[1:])
+
+
+def _booking_total_input_value(value) -> str:
+    if value is None:
+        return ""
+    try:
+        return str(Decimal(str(value)).quantize(Decimal("0.01")))
+    except Exception:
+        return str(value)
+
+
+def _booking_departure_date_input_value(booking: Booking) -> str:
+    booking_date = getattr(booking, "booking_date", None)
+    if not booking_date:
+        return ""
+
+    try:
+        if isinstance(booking_date, datetime):
+            return booking_date.date().strftime("%Y-%m-%d")
+        return booking_date.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def _booking_departure_time_input_value(booking: Booking, dispatch_departure_dt: datetime | None = None) -> str:
+    if dispatch_departure_dt:
+        try:
+            return dispatch_departure_dt.strftime("%H:%M")
+        except Exception:
+            pass
+
+    first_time = _extract_first_departure_time(getattr(booking, "time_range_raw", None))
+    if first_time:
+        try:
+            return first_time.strftime("%H:%M")
+        except Exception:
+            return ""
+
+    return ""
+
+
+@app.post("/admin/bookings/{booking_id}/update-basic")
+def admin_booking_update_basic(
+    booking_id: int,
+    request: Request,
+    customer_name: str = Form(""),
+    departure_date: str = Form(""),
+    departure_time: str = Form(""),
+    phone: str = Form(""),
+    total: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    r = _ensure_admin_or_redirect(request)
+    if r:
+        return r
+
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+
+    customer_name = (customer_name or "").strip()
+    departure_date = (departure_date or "").strip()
+    departure_time = (departure_time or "").strip()
+    phone = (phone or "").strip()
+    total = (total or "").strip()
+
+    if not customer_name:
+        return RedirectResponse(
+            url=f"/admin/bookings/{booking_id}?edit_err=customer",
+            status_code=303,
+        )
+
+    if not departure_date:
+        return RedirectResponse(
+            url=f"/admin/bookings/{booking_id}?edit_err=departure_date",
+            status_code=303,
+        )
+
+    if not departure_time:
+        return RedirectResponse(
+            url=f"/admin/bookings/{booking_id}?edit_err=departure_time",
+            status_code=303,
+        )
+
+    if not total:
+        return RedirectResponse(
+            url=f"/admin/bookings/{booking_id}?edit_err=total",
+            status_code=303,
+        )
+
+    try:
+        parsed_departure_date = datetime.strptime(departure_date, "%Y-%m-%d").date()
+    except Exception:
+        return RedirectResponse(
+            url=f"/admin/bookings/{booking_id}?edit_err=departure_date",
+            status_code=303,
+        )
+
+    try:
+        parsed_departure_time = datetime.strptime(departure_time, "%H:%M").time()
+        normalized_departure_time = parsed_departure_time.strftime("%H:%M")
+    except Exception:
+        return RedirectResponse(
+            url=f"/admin/bookings/{booking_id}?edit_err=departure_time",
+            status_code=303,
+        )
+
+    total_norm = total.replace(" ", "").replace(",", ".")
+    try:
+        parsed_total = Decimal(total_norm).quantize(Decimal("0.01"))
+    except Exception:
+        return RedirectResponse(
+            url=f"/admin/bookings/{booking_id}?edit_err=total",
+            status_code=303,
+        )
+
+    first_name, last_name = _split_customer_name_for_booking_edit(customer_name)
+    if not first_name:
+        return RedirectResponse(
+            url=f"/admin/bookings/{booking_id}?edit_err=customer",
+            status_code=303,
+        )
+
+    old_customer_name = f"{booking.first_name or ''} {booking.last_name or ''}".strip()
+    old_departure_date = _booking_departure_date_input_value(booking)
+    old_departure_time = _booking_departure_time_input_value(booking)
+    old_phone = (booking.phone or "").strip()
+    old_total = _booking_total_input_value(getattr(booking, "total", None))
+
+    booking.first_name = first_name
+    booking.last_name = last_name
+    booking.booking_date = parsed_departure_date
+    booking.time_range_raw = normalized_departure_time
+    booking.phone = phone or None
+    booking.total = parsed_total
+
+    change_log = []
+
+    if old_customer_name != customer_name:
+        change_log.append(f"Customer: {old_customer_name or '—'} -> {customer_name}")
+
+    if old_departure_date != departure_date:
+        change_log.append(f"Departure Date: {old_departure_date or '—'} -> {departure_date}")
+
+    if old_departure_time != normalized_departure_time:
+        change_log.append(f"Departure Time: {old_departure_time or '—'} -> {normalized_departure_time}")
+
+    if old_phone != phone:
+        change_log.append(f"Phone: {old_phone or '—'} -> {phone or '—'}")
+
+    if old_total != str(parsed_total):
+        change_log.append(f"Total: {old_total or '—'} -> {parsed_total}")
+
+    if change_log:
+        stamp = _vienna_now_naive().strftime("%d.%m.%Y %H:%M")
+        audit_block = "[ADMIN BOOKING EDIT " + stamp + "]\n" + "\n".join(change_log)
+
+        old_notes = (booking.notes or "").strip()
+        booking.notes = f"{old_notes}\n\n{audit_block}".strip() if old_notes else audit_block
+
+    try:
+        rematch_booking_to_trip(db, booking.id)
+        db.flush()
+        db.refresh(booking)
+
+        if booking.trip_id:
+            sync_booking_to_trip_passengers_by_id(
+                db,
+                booking.id,
+                strict_replace_extra=False,
+            )
+            db.flush()
+    except Exception:
+        pass
+
+    db.commit()
+
+    return RedirectResponse(
+        url=f"/admin/bookings/{booking_id}?edit_ok=1",
+        status_code=303,
     )
 
 # =======================
@@ -1760,9 +2198,13 @@ def _create_booking_seat_row(
     is_final: bool = False,
     selection_mode: str = "imported",
 ) -> BookingSeat:
+    resolved_trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
+    if resolved_trip_id:
+        booking.trip_id = resolved_trip_id
+
     row = BookingSeat(
         booking_id=booking.id,
-        trip_id=booking.trip_id,
+        trip_id=resolved_trip_id,
         seat_no=seat_no,
         is_final=is_final,
         selection_mode=selection_mode,
@@ -1966,90 +2408,6 @@ def _sync_booking_seats_to_trip_passengers(
         else:
             p.seat_no = seat_value
 
-def _get_booking_trip_passengers_for_seat_control(
-    db: Session,
-    booking: Booking,
-) -> list[TripPassenger]:
-    passengers = (
-        db.query(TripPassenger)
-        .filter(TripPassenger.booking_id == booking.id)
-        .order_by(TripPassenger.id.asc())
-        .all()
-    )
-
-    if passengers:
-        return sorted(passengers, key=_trip_passenger_sort_key)
-
-    resolved_trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
-    ext_key = _booking_external_id_key(booking)
-    if not resolved_trip_id or not ext_key:
-        return []
-
-    candidates = (
-        db.query(TripPassenger)
-        .filter(TripPassenger.trip_id == resolved_trip_id)
-        .all()
-    )
-
-    booking_by_id = {booking.id: booking}
-    matched: list[TripPassenger] = []
-    for p in candidates:
-        p_ext_key = _trip_passenger_external_id_key(p, booking_by_id=booking_by_id)
-        if p_ext_key == ext_key:
-            matched.append(p)
-
-    return sorted(matched, key=_trip_passenger_sort_key)
-
-
-def _booking_has_admin_locked_seat(db: Session, booking: Booking) -> bool:
-    passengers = _get_booking_trip_passengers_for_seat_control(db, booking)
-    return any(bool(getattr(p, "seat_locked_by_admin", False)) for p in passengers)
-
-
-def _set_booking_trip_passengers_admin_seat_lock(
-    db: Session,
-    booking_id: int,
-    is_locked: bool = True,
-) -> None:
-    booking = db.query(Booking).filter(Booking.id == booking_id).first()
-    if not booking:
-        return
-
-    passengers = _get_booking_trip_passengers_for_seat_control(db, booking)
-    for p in passengers:
-        if hasattr(p, "seat_locked_by_admin"):
-            p.seat_locked_by_admin = bool(is_locked)
-        if getattr(p, "booking_id", None) is None:
-            p.booking_id = booking.id
-
-
-def _sync_effective_trip_passenger_seats_to_booking(
-    db: Session,
-    booking: Booking,
-    selection_mode: str = "admin_locked",
-) -> list[str]:
-    passengers = _get_booking_trip_passengers_for_seat_control(db, booking)
-    seen = set()
-    seat_nos: list[str] = []
-
-    for p in passengers:
-        seat_no = _effective_trip_passenger_seat(p)
-        if not seat_no or seat_no in seen:
-            continue
-        seen.add(seat_no)
-        seat_nos.append(seat_no)
-
-    if seat_nos:
-        _apply_booking_seat_assignment(
-            db=db,
-            booking=booking,
-            seat_nos=seat_nos,
-            selection_mode=selection_mode,
-        )
-
-    return seat_nos
-
-
 def _sync_booking_seat_to_trip_passengers(
     db: Session,
     booking_id: int,
@@ -2100,6 +2458,10 @@ def _apply_booking_seat_assignment(
     """
     Записва всички seat rows за booking-а и ги sync-ва към TripPassenger.
     """
+    resolved_trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
+    if resolved_trip_id:
+        booking.trip_id = resolved_trip_id
+
     normalized: list[str] = []
     seen = set()
 
@@ -2116,7 +2478,7 @@ def _apply_booking_seat_assignment(
     rows = _ensure_booking_seat_rows(db, booking, required_count)
 
     for idx, row in enumerate(rows):
-        row.trip_id = booking.trip_id
+        row.trip_id = getattr(booking, "trip_id", None)
         if idx < len(normalized):
             row.seat_no = normalized[idx]
             row.is_final = True
@@ -2203,15 +2565,41 @@ def _norm_service_part(value: str | None) -> str:
     return s
 
 
-def _booking_service_key(booking: Booking) -> tuple[str, str] | None:
+def _booking_service_key(db_or_booking, booking: Booking | None = None):
     """
-    Seat map се връзва по:
-      (booking_date, direction_code)
+    Backward-compatible service key helper.
 
-    direction_code:
-      IK = Innsbruck -> Kyiv
-      KI = Kyiv -> Innsbruck
+    Поддържа и двата варианта:
+      _booking_service_key(booking)
+      _booking_service_key(db, booking)
+
+    Приоритет:
+      1) ако booking има trip_id -> service key е по trip_id
+      2) ако има db, пробва resolve на trip_id
+      3) fallback към старото: booking_date + direction_code
     """
+    if booking is None:
+        db = None
+        booking = db_or_booking
+    else:
+        db = db_or_booking
+
+    if not booking:
+        return None
+
+    trip_id = getattr(booking, "trip_id", None)
+
+    if not trip_id and db is not None:
+        try:
+            trip_id = _resolve_booking_trip_id(db, booking)
+            if trip_id:
+                booking.trip_id = trip_id
+        except Exception:
+            trip_id = getattr(booking, "trip_id", None)
+
+    if trip_id:
+        return ("trip", str(int(trip_id)))
+
     booking_date = getattr(booking, "booking_date", None)
     direction_code = _booking_direction_code(booking)
 
@@ -2266,8 +2654,22 @@ def _service_taken_seats(
     return taken
 
 
-def _ensure_booking_has_service(booking: Booking) -> bool:
-    return _booking_service_key(booking) is not None
+def _ensure_booking_has_service(db_or_booking, booking: Booking | None = None) -> bool:
+    """
+    Backward-compatible helper.
+
+    Поддържа и двата начина на извикване:
+      _ensure_booking_has_service(booking)
+      _ensure_booking_has_service(db, booking)
+    """
+    if booking is None:
+        db = None
+        booking = db_or_booking
+    else:
+        db = db_or_booking
+
+    return _booking_service_key(db, booking) is not None
+
 
 
 
@@ -2402,11 +2804,17 @@ def _hours_until_departure(booking: Booking) -> float | None:
 
 
 def _can_upload_payment_proof(booking: Booking) -> bool:
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return False
+
     method = _norm_payment_method(getattr(booking, "payment_method", None))
     return method in {"bank", "paypal"}
 
 
 def _can_portal_select_seat(booking: Booking) -> bool:
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return False
+
     method = _norm_payment_method(getattr(booking, "payment_method", None))
     if method not in {"bank", "paypal"}:
         return False
@@ -2421,6 +2829,9 @@ def _can_portal_select_seat(booking: Booking) -> bool:
 
 
 def _can_portal_change_seat(booking: Booking) -> bool:
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return False
+
     if not _can_portal_select_seat(booking):
         return False
 
@@ -2485,6 +2896,9 @@ def _can_dispatch_assign_cash_seat(db: Session, booking: Booking) -> bool:
     - ако има trip/departure datetime
     - ако сме в прозорец 24h до 10h преди тръгване
     """
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return False
+
     if _norm_payment_method(getattr(booking, "payment_method", None)) != "cash":
         return False
 
@@ -2507,6 +2921,9 @@ def _cash_booking_confirmed(booking: Booking) -> bool:
 
 
 def _can_portal_view_ticket(booking: Booking) -> bool:
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return False
+
     if not _ensure_booking_has_service(booking):
         return False
 
@@ -2518,6 +2935,9 @@ def _can_portal_view_ticket(booking: Booking) -> bool:
 
 
 def _ticket_qr_available(booking: Booking) -> bool:
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return False
+
     if not _ensure_booking_has_service(booking):
         return False
 
@@ -4110,32 +4530,6 @@ def portal_ticket_pdf(request: Request, db: Session = Depends(get_db)):
     selected_seat = _booking_selected_seat(booking)
     qr_available = _ticket_qr_available(booking)
 
-    trip = None
-    if getattr(booking, "trip_id", None):
-        trip = db.query(Trip).filter(Trip.id == booking.trip_id).first()
-
-    passenger = None
-    if selected_seat:
-        passengers = (
-            db.query(TripPassenger)
-            .filter(TripPassenger.booking_id == booking.id)
-            .order_by(TripPassenger.id.asc())
-            .all()
-        )
-        if passengers:
-            seat_norm = str(selected_seat or "").strip()
-            for p in passengers:
-                p_seat = (
-                    getattr(p, "manual_seat_no", None)
-                    or getattr(p, "seat_no", None)
-                    or getattr(p, "effective_seat_no", None)
-                )
-                if str(p_seat or "").strip() == seat_norm:
-                    passenger = p
-                    break
-            if passenger is None:
-                passenger = passengers[0]
-
     stop_points = _booking_stop_points(booking)
     departure_stop = stop_points.get("departure", {}) or {}
     arrival_stop = stop_points.get("arrival", {}) or {}
@@ -4846,6 +5240,25 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
         or 0
     )
 
+    today_start = _vienna_now_naive().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(days=1)
+
+    total_today_bookings = int(
+        db.query(func.count(Booking.id))
+        .filter(Booking.created_at.isnot(None))
+        .filter(Booking.created_at >= today_start)
+        .filter(Booking.created_at < today_end)
+        .scalar()
+        or 0
+    ) 
+
+    total_pending_cancellations = int(
+        db.query(func.count(BookingCancellation.id))
+        .filter(BookingCancellation.admin_status == "pending")
+        .scalar()
+        or 0
+    )
+
     recent_bookings = (
         db.query(Booking)
         .order_by(Booking.created_at.desc(), Booking.id.desc())
@@ -4859,10 +5272,13 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
         .all()
     )
 
-    booking_ids = [b.id for b in all_bookings]
+    booking_ids = [int(b.id) for b in all_bookings if getattr(b, "id", None) is not None]
 
     proof_count_map: dict[int, int] = {}
-    final_seat_map: dict[int, str] = {}
+    final_seats_map: dict[int, list[str]] = {}
+    qty_sum_map: dict[int, int] = {}
+    linked_pax_count_map: dict[int, int] = {}
+    booking_seat_count_map: dict[int, int] = {}
 
     if booking_ids:
         proof_rows = (
@@ -4884,8 +5300,99 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
             .all()
         )
         for bid, seat_no in final_seat_rows:
-            if bid is not None and bid not in final_seat_map and seat_no:
-                final_seat_map[int(bid)] = str(seat_no).strip()
+            if bid is None or not seat_no:
+                continue
+            final_seats_map.setdefault(int(bid), []).append(str(seat_no).strip())
+
+        qty_rows = (
+            db.query(
+                BookingTicketLine.booking_id,
+                func.coalesce(func.sum(BookingTicketLine.qty), 0),
+            )
+            .filter(BookingTicketLine.booking_id.in_(booking_ids))
+            .group_by(BookingTicketLine.booking_id)
+            .all()
+        )
+        qty_sum_map = {
+            int(bid): int(total_qty or 0)
+            for bid, total_qty in qty_rows
+            if bid is not None
+        }
+
+        linked_pax_rows = (
+            db.query(TripPassenger.booking_id, func.count(TripPassenger.id))
+            .filter(
+                TripPassenger.booking_id.in_(booking_ids),
+                TripPassenger.booking_id.isnot(None),
+            )
+            .group_by(TripPassenger.booking_id)
+            .all()
+        )
+        linked_pax_count_map = {
+            int(bid): int(cnt or 0)
+            for bid, cnt in linked_pax_rows
+            if bid is not None
+        }
+
+        booking_seat_rows = (
+            db.query(BookingSeat.booking_id, func.count(BookingSeat.id))
+            .filter(BookingSeat.booking_id.in_(booking_ids))
+            .group_by(BookingSeat.booking_id)
+            .all()
+        )
+        booking_seat_count_map = {
+            int(bid): int(cnt or 0)
+            for bid, cnt in booking_seat_rows
+            if bid is not None
+        }
+
+    for booking_id, seat_list in list(final_seats_map.items()):
+        unique = [s for s in dict.fromkeys(seat_list) if s]
+        unique.sort(key=_seat_sort_key)
+        final_seats_map[booking_id] = unique
+
+    booking_trip_ids = {
+        int(getattr(b, "trip_id", 0) or 0)
+        for b in all_bookings
+        if getattr(b, "trip_id", None)
+    }
+
+    passenger_trip_ids = {
+        int(tid)
+        for (tid,) in db.query(TripPassenger.trip_id)
+        .filter(TripPassenger.trip_id.isnot(None))
+        .distinct()
+        .all()
+        if tid is not None
+    }
+
+    all_relevant_trip_ids = sorted(booking_trip_ids | passenger_trip_ids)
+
+    trip_by_id: dict[int, Trip] = {}
+    if all_relevant_trip_ids:
+        trips = db.query(Trip).filter(Trip.id.in_(all_relevant_trip_ids)).all()
+        trip_by_id = {int(t.id): t for t in trips}
+
+    all_trip_passengers: list[TripPassenger] = []
+    if all_relevant_trip_ids:
+        all_trip_passengers = (
+            db.query(TripPassenger)
+            .filter(TripPassenger.trip_id.in_(all_relevant_trip_ids))
+            .all()
+        )
+
+    trip_passengers_by_trip_id: dict[int, list[TripPassenger]] = {}
+    for p in all_trip_passengers:
+        trip_id = getattr(p, "trip_id", None)
+        if trip_id is None:
+            continue
+        trip_passengers_by_trip_id.setdefault(int(trip_id), []).append(p)
+
+    for trip_id in list(trip_passengers_by_trip_id.keys()):
+        trip_passengers_by_trip_id[trip_id] = sorted(
+            trip_passengers_by_trip_id[trip_id],
+            key=_trip_passenger_sort_key,
+        )
 
     now_vienna = _vienna_now_naive()
 
@@ -4896,80 +5403,126 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
     dispatcher_seat_assignment_needed = []
 
     day_direction_map: dict[str, dict[str, dict]] = {}
-    direction_trip_ids_by_day: dict[tuple[str, str], set[int]] = {}
 
-    def _dir_bucket(date_key: str, dir_key: str) -> dict:
-        if date_key not in day_direction_map:
-            day_direction_map[date_key] = {
-                "red": {
-                    "label": "Innsbruck → Kyiv",
-                    "present": False,
-                    "bank_paypal_missing_proof_le72": [],
-                    "bank_paypal_missing_proof_gt72": [],
-                    "cash_not_confirmed_le72": [],
-                    "cash_not_confirmed_gt72": [],
-                    "dispatcher_seat_assignment_needed": [],
-                    "taken_seats": set(),
-                },
-                "blue": {
-                    "label": "Kyiv → Innsbruck",
-                    "present": False,
-                    "bank_paypal_missing_proof_le72": [],
-                    "bank_paypal_missing_proof_gt72": [],
-                    "cash_not_confirmed_le72": [],
-                    "cash_not_confirmed_gt72": [],
-                    "dispatcher_seat_assignment_needed": [],
-                    "taken_seats": set(),
-                },
+    def _dir_bucket(date_key: str, direction_key: str, direction_label: str) -> dict:
+        day_bucket = day_direction_map.setdefault(date_key, {})
+        if direction_key not in day_bucket:
+            day_bucket[direction_key] = {
+                "key": direction_key,
+                "label": direction_label,
+                "present": False,
+                "items": [],
+                "trip_ids": set(),
+                "bank_paypal_missing_proof_le72": [],
+                "bank_paypal_missing_proof_gt72": [],
+                "cash_not_confirmed_le72": [],
+                "cash_not_confirmed_gt72": [],
+                "dispatcher_seat_assignment_needed": [],
+                "taken_seats": set(),
             }
-        return day_direction_map[date_key][dir_key]
+        return day_bucket[direction_key]
 
-    def _dashboard_item(booking: Booking, dep_dt: datetime, hours_left: float) -> dict:
+    def _dashboard_item(
+        booking: Booking,
+        dep_dt: datetime | None,
+        booking_date_obj: date,
+        hours_left: float | None,
+    ) -> dict:
         passenger_name = f"{booking.first_name or ''} {booking.last_name or ''}".strip() or "—"
-        route = f"{booking.route_from or '—'} → {booking.route_to or '—'}"
+        route = f"{booking.route_from or booking.bus_from or '—'} → {booking.route_to or booking.bus_to or '—'}"
+        departure_str = dep_dt.strftime("%d.%m.%Y %H:%M") if dep_dt else booking_date_obj.strftime("%d.%m.%Y")
         return {
             "id": booking.id,
             "external_id": booking.external_id,
             "passenger_name": passenger_name,
             "route": route,
-            "departure_str": dep_dt.strftime("%d.%m.%Y %H:%M"),
+            "departure_str": departure_str,
             "hours_left": hours_left,
-            "hours_left_str": f"{hours_left:.1f} h",
+            "hours_left_str": f"{hours_left:.1f} h" if hours_left is not None else "—",
             "payment_status": booking.payment_status or "—",
             "booking_status": booking.booking_status or "—",
             "url": f"/admin/bookings/{booking.id}",
         }
 
-    for booking in all_bookings:
-        dep_dt = _booking_departure_dt_for_dispatch(db, booking)
-        if not dep_dt:
+    def _fast_booking_passenger_count(booking: Booking) -> int:
+        booking_id = int(getattr(booking, "id", 0) or 0)
+        if not booking_id:
+            return 1
+
+        total_qty = int(qty_sum_map.get(booking_id, 0) or 0)
+        if total_qty > 0:
+            return total_qty
+
+        pax_count = int(linked_pax_count_map.get(booking_id, 0) or 0)
+        if pax_count > 0:
+            return pax_count
+
+        seat_count = int(booking_seat_count_map.get(booking_id, 0) or 0)
+        if seat_count > 0:
+            return seat_count
+
+        final_seat_count = len(final_seats_map.get(booking_id, []) or [])
+        if final_seat_count > 0:
+            return final_seat_count
+
+        for attr in ("passenger_count", "pax_count", "seats_count", "qty"):
+            value = getattr(booking, attr, None)
+            try:
+                if value is not None and int(value) > 0:
+                    return int(value)
+            except Exception:
+                pass
+
+        return 1
+
+    for trip in trip_by_id.values():
+        trip_date_obj = _dashboard_trip_base_date(trip)
+        if not trip_date_obj:
             continue
 
-        hours_left = (dep_dt - now_vienna).total_seconds() / 3600.0
-        if hours_left < 0:
-            continue
-
-        direction_code = _booking_direction_code(booking)
-        if direction_code not in {"IK", "KI"}:
-            continue
-
-        date_key = dep_dt.date().isoformat()
-        dir_key = "red" if direction_code == "IK" else "blue"
-        bucket = _dir_bucket(date_key, dir_key)
+        direction_meta = _dashboard_direction_meta_for_trip(trip)
+        date_key = trip_date_obj.isoformat()
+        bucket = _dir_bucket(date_key, direction_meta["key"], direction_meta["label"])
         bucket["present"] = True
+        bucket["trip_ids"].add(int(trip.id))
 
-        if getattr(booking, "trip_id", None):
-            direction_trip_ids_by_day.setdefault((date_key, dir_key), set()).add(int(booking.trip_id))
+    for booking in all_bookings:
+        booking_date_obj = _dashboard_booking_base_date(booking, trip_by_id=trip_by_id)
+        if not booking_date_obj:
+            continue
+
+        dep_dt = _booking_departure_dt_for_dispatch(db, booking)
+        hours_left = None
+        if dep_dt is not None:
+            hours_left = (dep_dt - now_vienna).total_seconds() / 3600.0
+
+        direction_meta = _dashboard_direction_meta_for_booking(booking, trip_by_id=trip_by_id)
+        date_key = booking_date_obj.isoformat()
+        direction_key = direction_meta["key"]
+        bucket = _dir_bucket(date_key, direction_key, direction_meta["label"])
+        bucket["present"] = True
+        bucket["items"].append(booking)
+
+        booking_trip_id = getattr(booking, "trip_id", None)
+        if booking_trip_id:
+            bucket["trip_ids"].add(int(booking_trip_id))
 
         method = _norm_payment_method(getattr(booking, "payment_method", None))
         proof_count = proof_count_map.get(int(booking.id), 0)
-        final_seat = final_seat_map.get(int(booking.id))
-        has_final_seat = bool(final_seat)
+        final_seats = list(final_seats_map.get(int(booking.id), []))
+        has_final_seat = bool(final_seats)
 
-        if final_seat:
-            bucket["taken_seats"].add(final_seat)
+        setattr(booking, "_dashboard_final_seats", final_seats)
+        setattr(booking, "_dashboard_passenger_count", _fast_booking_passenger_count(booking))
 
-        item = _dashboard_item(booking, dep_dt, hours_left)
+        for seat_no in final_seats:
+            if seat_no:
+                bucket["taken_seats"].add(str(seat_no).strip())
+
+        item = _dashboard_item(booking, dep_dt, booking_date_obj, hours_left)
+
+        if hours_left is None or hours_left < 0:
+            continue
 
         if method in {"bank", "paypal"} and proof_count == 0 and booking.payment_status != "paid":
             if hours_left <= 72:
@@ -4991,47 +5544,36 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
             method == "cash"
             and booking.booking_status == "confirmed"
             and not has_final_seat
-            and _ensure_booking_has_service(booking)
+            and _ensure_booking_has_service(db, booking)
             and 10 <= hours_left <= 24
         ):
             dispatcher_seat_assignment_needed.append(item)
             bucket["dispatcher_seat_assignment_needed"].append(item)
 
-    bank_paypal_missing_proof_le_72.sort(key=lambda x: x["hours_left"])
-    bank_paypal_missing_proof_gt_72.sort(key=lambda x: x["hours_left"])
-    cash_not_confirmed_le_72.sort(key=lambda x: x["hours_left"])
-    cash_not_confirmed_gt_72.sort(key=lambda x: x["hours_left"])
-    dispatcher_seat_assignment_needed.sort(key=lambda x: x["hours_left"])
+    def _hours_sort_value(item: dict):
+        hours_left = item.get("hours_left")
+        if hours_left is None:
+            return 10**9
+        return float(hours_left)
 
-    passengers_by_trip_id: dict[int, list[TripPassenger]] = {}
-    all_direction_trip_ids = sorted({
-        trip_id
-        for trip_ids in direction_trip_ids_by_day.values()
-        for trip_id in trip_ids
-    })
-
-    if all_direction_trip_ids:
-        trip_passenger_rows = (
-            db.query(TripPassenger)
-            .filter(TripPassenger.trip_id.in_(all_direction_trip_ids))
-            .order_by(TripPassenger.trip_id.asc(), TripPassenger.id.asc())
-            .all()
-        )
-        for p in trip_passenger_rows:
-            if getattr(p, "trip_id", None) is not None:
-                passengers_by_trip_id.setdefault(int(p.trip_id), []).append(p)
+    bank_paypal_missing_proof_le_72.sort(key=_hours_sort_value)
+    bank_paypal_missing_proof_gt_72.sort(key=_hours_sort_value)
+    cash_not_confirmed_le_72.sort(key=_hours_sort_value)
+    cash_not_confirmed_gt_72.sort(key=_hours_sort_value)
+    dispatcher_seat_assignment_needed.sort(key=_hours_sort_value)
 
     dashboard_calendar_data = {}
-    for date_key, dirs in day_direction_map.items():
-        dashboard_calendar_data[date_key] = {}
-        for dir_key, bucket in dirs.items():
-            trip_ids_for_bucket = sorted(direction_trip_ids_by_day.get((date_key, dir_key), set()))
+    for date_key in sorted(day_direction_map.keys()):
+        dirs = day_direction_map[date_key]
+        direction_payloads: list[dict] = []
+
+        for direction_key, bucket in sorted(dirs.items(), key=lambda kv: str(kv[1].get("label") or "").lower()):
             trip_passengers: list[TripPassenger] = []
             seen_passenger_ids: set[int] = set()
             taken_seats_union = set(bucket["taken_seats"])
 
-            for trip_id in trip_ids_for_bucket:
-                for p in passengers_by_trip_id.get(int(trip_id), []):
+            for trip_id in sorted(bucket.get("trip_ids", set())):
+                for p in trip_passengers_by_trip_id.get(int(trip_id), []):
                     pid = int(getattr(p, "id", 0) or 0)
                     if pid and pid in seen_passenger_ids:
                         continue
@@ -5044,9 +5586,9 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
 
             trip_passengers = sorted(trip_passengers, key=_trip_passenger_sort_key)
 
-            dashboard_calendar_data[date_key][dir_key] = _build_dashboard_direction_payload(
+            payload = _build_dashboard_direction_payload(
                 label=bucket["label"],
-                items=[],
+                items=bucket["items"],
                 trip_passengers=trip_passengers,
                 bank_paypal_missing_proof_le72=bucket["bank_paypal_missing_proof_le72"],
                 cash_not_confirmed_le72=bucket["cash_not_confirmed_le72"],
@@ -5054,8 +5596,26 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
                 bank_paypal_missing_proof_gt72=bucket["bank_paypal_missing_proof_gt72"],
                 cash_not_confirmed_gt72=bucket["cash_not_confirmed_gt72"],
                 extra_taken_seats=taken_seats_union,
-                total_confirmed=len(trip_passengers),
+                total_confirmed=None,
             )
+            payload["key"] = direction_key
+            payload["booking_count"] = len(bucket["items"])
+            direction_payloads.append(payload)
+
+        direction_payloads.sort(key=_dashboard_direction_sort_key)
+        legacy_red = direction_payloads[0] if len(direction_payloads) > 0 else _empty_dashboard_direction_payload("—", "AT->UA")
+        legacy_blue = direction_payloads[1] if len(direction_payloads) > 1 else _empty_dashboard_direction_payload("—", "UA->AT")
+
+        dashboard_calendar_data[date_key] = {
+            "present": bool(direction_payloads),
+            "issue_count": sum(int(item.get("issue_count") or 0) for item in direction_payloads),
+            "direction_count": len(direction_payloads),
+            "booking_count": sum(int(item.get("booking_count") or 0) for item in direction_payloads),
+            "directions": direction_payloads,
+            "red": legacy_red,
+            "blue": legacy_blue,
+            "other_directions": direction_payloads[2:],
+        }
 
     return templates.TemplateResponse(
         request,
@@ -5066,6 +5626,7 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
                 "total_bookings": total_bookings,
                 "total_paid": total_paid,
                 "total_pending_review": total_pending_review,
+                "total_today_bookings": total_today_bookings,
             },
             "recent_bookings": recent_bookings,
             "critical": {
@@ -5074,11 +5635,13 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
                 "cash_not_confirmed_le_72": cash_not_confirmed_le_72,
                 "cash_not_confirmed_gt_72": cash_not_confirmed_gt_72,
                 "dispatcher_seat_assignment_needed": dispatcher_seat_assignment_needed,
+                "pending_cancellations_count": total_pending_cancellations,
             },
             "seat_layout": SEAT_LAYOUT,
             "dashboard_calendar_data": dashboard_calendar_data,
         },
     )
+
 
 @app.get("/admin/bookings/{booking_id}", response_class=HTMLResponse)
 def admin_booking_detail_page(
@@ -5143,7 +5706,12 @@ def admin_booking_detail_page(
     dispatch_taken_seats = _service_taken_seats(db, booking, exclude_booking_id=booking.id) if _ensure_booking_has_service(booking) else set()
     dispatch_all_seats = _service_default_seat_map(booking) if _ensure_booking_has_service(booking) else []
     dispatch_departure_dt = _booking_departure_dt_for_dispatch(db, booking)
-    
+
+    editable_customer_name = f"{booking.first_name or ''} {booking.last_name or ''}".strip()
+    editable_departure_date = _booking_departure_date_input_value(booking)
+    editable_departure_time = _booking_departure_time_input_value(booking, dispatch_departure_dt)
+    editable_total = _booking_total_input_value(getattr(booking, "total", None))
+
     return templates.TemplateResponse(request, "admin/booking_detail.html", {
         "section": "detail",
         "booking": booking,
@@ -5165,8 +5733,15 @@ def admin_booking_detail_page(
         "seat_layout": SEAT_LAYOUT,
         "seat_admin_ok": request.query_params.get("seat_admin_ok", ""),
         "seat_admin_err": request.query_params.get("seat_admin_err", ""),
-    })
 
+        "edit_ok": request.query_params.get("edit_ok", ""),
+        "edit_err": request.query_params.get("edit_err", ""),
+        "editable_customer_name": editable_customer_name,
+        "editable_departure_date": editable_departure_date,
+        "editable_departure_time": editable_departure_time,
+        "editable_total": editable_total,
+    })
+ 
 
 @app.post("/admin/payment-proofs/{proof_id}/approve")
 def admin_approve_payment_proof(
@@ -5433,9 +6008,8 @@ def portal_dashboard(request: Request, db: Session = Depends(get_db)):
 
     payment_method_norm = _norm_payment_method(booking.payment_method)
     can_upload_payment_proof = _can_upload_payment_proof(booking)
-    admin_seat_locked = _booking_has_admin_locked_seat(db, booking)
-    can_select_seat = _can_portal_select_seat(booking) and not admin_seat_locked
-    can_change_seat = _can_portal_change_seat(booking) and not admin_seat_locked
+    can_select_seat = _can_portal_select_seat(booking)
+    can_change_seat = _can_portal_change_seat(booking)
     is_cash_booking = _cash_notice_active(booking)
     hours_until_departure = _hours_until_departure(booking)
     cash_confirmed = _cash_booking_confirmed(booking)
@@ -5505,6 +6079,9 @@ async def portal_upload_payment_proof(
         request.session.pop("portal_booking_id", None)
         return RedirectResponse(url="/portal/login?err=notfound", status_code=303)
 
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return RedirectResponse(url="/portal?upload_err=cancelled", status_code=303)
+
     if not _can_upload_payment_proof(booking):
         return RedirectResponse(url="/portal?upload_err=payment_method", status_code=303)
 
@@ -5563,6 +6140,9 @@ def portal_change_payment_method(
         request.session.pop("portal_booking_id", None)
         return RedirectResponse(url="/portal/login?err=notfound", status_code=303)
 
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return RedirectResponse(url="/portal?payment_err=cancelled", status_code=303)
+
     new_method = _norm_payment_method(payment_method)
     if new_method not in {"bank", "paypal"}:
         return RedirectResponse(url="/portal?payment_err=method", status_code=303)
@@ -5594,6 +6174,9 @@ def portal_cash_confirm(
         request.session.pop("portal_booking_id", None)
         return RedirectResponse(url="/portal/login?err=notfound", status_code=303)
 
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return RedirectResponse(url="/portal?cash_err=cancelled", status_code=303)
+
     if not _cash_notice_active(booking):
         return RedirectResponse(url="/portal?cash_err=method", status_code=303)
 
@@ -5623,6 +6206,9 @@ def portal_seats_page(request: Request, db: Session = Depends(get_db)):
     booking, redirect_resp = _portal_booking_or_redirect(request, db)
     if redirect_resp:
         return redirect_resp
+
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return RedirectResponse(url="/portal?seat_err=cancelled", status_code=303)
 
     if _norm_payment_method(booking.payment_method) not in {"bank", "paypal"}:
         return RedirectResponse(url="/portal?seat_err=payment_method", status_code=303)
@@ -5671,6 +6257,9 @@ def portal_select_seat(
     booking, redirect_resp = _portal_booking_or_redirect(request, db)
     if redirect_resp:
         return redirect_resp
+
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return RedirectResponse(url="/portal?seat_err=cancelled", status_code=303)
 
     if _norm_payment_method(booking.payment_method) not in {"bank", "paypal"}:
         return RedirectResponse(url="/portal?seat_err=payment_method", status_code=303)
@@ -5735,7 +6324,7 @@ def portal_select_seat(
     else:
         # ако вече са достигнати всички места, заменяме последното
         row = final_rows[-1]
-        row.trip_id = booking.trip_id
+        row.trip_id = getattr(booking, "trip_id", None)
         row.seat_no = seat_no
         row.is_final = True
         row.selection_mode = "manual"
@@ -5759,6 +6348,9 @@ def portal_auto_assign_seat(
     booking, redirect_resp = _portal_booking_or_redirect(request, db)
     if redirect_resp:
         return redirect_resp
+
+    if _booking_is_cancelled_or_pending_cancellation(booking):
+        return RedirectResponse(url="/portal?seat_err=cancelled", status_code=303)
 
     if _norm_payment_method(booking.payment_method) not in {"bank", "paypal"}:
         return RedirectResponse(url="/portal?seat_err=payment_method", status_code=303)
@@ -5821,6 +6413,20 @@ def portal_auto_assign_seat(
 
     return RedirectResponse(url="/portal?seat_ok=auto", status_code=303)
 
+
+@app.post("/set-language")
+def set_language(
+    request: Request,
+    lang: str = Form(DEFAULT_LANG),
+    next: str = Form("/"),
+):
+    _set_lang(request, lang)
+
+    next_url = (next or "/").strip()
+    if not next_url.startswith("/"):
+        next_url = "/"
+
+    return RedirectResponse(url=next_url, status_code=303)
 
 # =======================
 # Admin login
