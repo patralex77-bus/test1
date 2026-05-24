@@ -1,0 +1,85 @@
+{% extends "admin/bookings_layout.html" %}
+{% block bookings_content %}
+
+{% if request.query_params.get("ok") == "approved" %}
+<div class="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800">
+  Анулацията беше приета успешно.
+</div>
+{% endif %}
+
+<div class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+  <div class="border-b border-slate-200 px-5 py-4">
+    <h2 class="text-lg font-semibold">Анулации</h2>
+  </div>
+
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr class="text-left">
+          <th class="px-4 py-3 font-semibold text-slate-700">ID</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Booking</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Requested at</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Travel at</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Refund</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Status</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Reason</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Action</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-200">
+        {% for x in items %}
+        <tr>
+          <td class="px-4 py-3">{{ x.id }}</td>
+          <td class="px-4 py-3">
+            <div class="font-medium">{{ x.external_id or "—" }}</div>
+            <div class="text-xs text-slate-500">booking_id: {{ x.booking_id }}</div>
+          </td>
+          <td class="px-4 py-3">
+            {% if x.requested_at %}{{ x.requested_at.strftime("%d.%m.%Y %H:%M") }}{% else %}—{% endif %}
+          </td>
+          <td class="px-4 py-3">
+            {% if x.travel_at %}{{ x.travel_at.strftime("%d.%m.%Y %H:%M") }}{% else %}—{% endif %}
+          </td>
+          <td class="px-4 py-3">
+            <div>{{ x.refund_percent }}%</div>
+            <div class="text-xs text-slate-500">
+              {% if x.refund_amount is not none %}{{ x.refund_amount }} {{ x.currency or "" }}{% else %}—{% endif %}
+            </div>
+          </td>
+          <td class="px-4 py-3">
+            {% if x.admin_status == "approved" %}
+              <span class="inline-flex rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">approved</span>
+            {% elif x.admin_status == "rejected" %}
+              <span class="inline-flex rounded-xl border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">rejected</span>
+            {% else %}
+              <span class="inline-flex rounded-xl border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">pending</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 whitespace-pre-wrap">{{ x.reason or "—" }}</td>
+          <td class="px-4 py-3">
+            {% if x.admin_status == "pending" %}
+            <form method="post" action="/admin/bookings/cancellations/{{ x.id }}/approve"
+                  onsubmit="return confirm('Да приема ли тази анулация?');">
+              <button type="submit"
+                      class="inline-flex items-center rounded-xl border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100">
+                Приеми
+              </button>
+            </form>
+            {% else %}
+              <span class="text-xs text-slate-400">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="px-4 py-10 text-center text-sm text-slate-500">
+            Няма подадени анулации.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

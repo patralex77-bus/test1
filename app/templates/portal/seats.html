@@ -1,0 +1,500 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="max-w-7xl mx-auto">
+  <div class="flex items-center justify-between gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl font-bold tracking-tight">{{ t(request, "portal.seats.page_title") }}</h1>
+      <p class="text-sm text-slate-500 mt-1">
+        {{ t(request, "portal.seats.booking_label") }} {{ booking.external_id }}
+      </p>
+    </div>
+
+    <a href="/portal"
+       class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+      ← {{ t(request, "portal.seats.back_to_portal") }}
+    </a>
+  </div>
+
+  {% if seat_ok %}
+    <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      {% if seat_ok == "assigned" %}
+        {{ t(request, "portal.seats.ok_assigned") }}
+      {% elif seat_ok == "auto" %}
+        {{ t(request, "portal.seats.ok_auto") }}
+      {% elif seat_ok == "selected" %}
+        {{ t(request, "portal.seats.ok_selected") }}
+      {% else %}
+        {{ t(request, "portal.seats.ok_updated") }}
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if seat_err %}
+    <div class="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+      {% if seat_err == "missing" %}
+        {{ t(request, "portal.seats.err_missing") }}
+      {% elif seat_err == "invalid" %}
+        {{ t(request, "portal.seats.err_invalid") }}
+      {% elif seat_err == "taken" %}
+        {{ t(request, "portal.seats.err_taken") }}
+      {% elif seat_err == "full" %}
+        {{ t(request, "portal.seats.err_full") }}
+      {% elif seat_err == "payment" %}
+        {{ t(request, "portal.seats.err_payment") }}
+      {% elif seat_err == "service" %}
+        {{ t(request, "portal.seats.err_service") }}
+      {% elif seat_err == "payment_method" %}
+        {{ t(request, "portal.seats.err_payment_method") }}
+      {% elif seat_err == "change_locked" %}
+        {{ t(request, "portal.seats.err_change_locked") }}
+      {% else %}
+        {{ t(request, "portal.seats.err_generic") }}
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <div id="jsInfoBox" class="hidden mb-4 rounded-xl border px-4 py-3 text-sm"></div>
+
+  <form id="assignSeatsForm" method="post" action="/portal/seats/assign">
+    <div id="seatInputs"></div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start">
+      <div class="min-w-0">
+        <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div class="border-b border-slate-200 px-5 py-4">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 class="text-lg font-semibold">{{ t(request, "portal.seats.map_title") }}</h2>
+                <div class="text-sm text-slate-500 mt-1">
+                  {{ t(request, "portal.seats.map_hint_before") }}
+                  <span class="font-semibold text-slate-900">{{ t(request, "portal.seats.assign_button") }}</span>.
+                </div>
+              </div>
+
+              <div class="flex flex-wrap gap-3">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center min-w-[110px]">
+                  <div class="text-slate-500 text-xs uppercase tracking-wide">{{ t(request, "portal.seats.required") }}</div>
+                  <div class="mt-1 text-lg font-semibold text-slate-900" id="requiredCountTop">{{ passenger_count }}</div>
+                </div>
+
+                <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center min-w-[110px]">
+                  <div class="text-slate-500 text-xs uppercase tracking-wide">{{ t(request, "portal.seats.selected") }}</div>
+                  <div class="mt-1 text-lg font-semibold text-emerald-700" id="selectedCountTop">0</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-5">
+            <div class="mb-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              {{ t(request, "portal.seats.legend_hint") }}
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 overflow-x-auto">
+              <div class="seat-map min-w-[760px]" id="seatMap">
+                {% for row in seat_layout %}
+                  <div class="seat-row">
+                    {% for seat in row %}
+                      {% if seat is none %}
+                        <div class="seat-cell empty"></div>
+                      {% else %}
+                        <button
+                          type="button"
+                          class="seat-cell seat-btn"
+                          data-seat="{{ seat|string }}">
+                          {{ seat|string }}
+                        </button>
+                      {% endif %}
+                    {% endfor %}
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+
+            <div class="mt-5 flex flex-wrap gap-4 text-xs">
+              <div class="flex items-center gap-2">
+                <span class="inline-block h-4 w-4 rounded border border-slate-300 bg-white"></span>
+                <span class="text-slate-600">{{ t(request, "portal.seats.free") }}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="inline-block h-4 w-4 rounded border border-red-300 bg-red-100"></span>
+                <span class="text-slate-600">{{ t(request, "portal.seats.taken") }}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="inline-block h-4 w-4 rounded border border-emerald-300 bg-emerald-50"></span>
+                <span class="text-slate-600">{{ t(request, "portal.seats.selected") }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-6">
+        <div class="rounded-2xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-6">
+          <div class="border-b border-slate-200 px-5 py-4">
+            <h2 class="text-lg font-semibold">{{ t(request, "portal.seats.current_selection") }}</h2>
+          </div>
+
+          <div class="p-5 space-y-5 text-sm">
+            <div class="grid grid-cols-1 gap-4">
+              <div>
+                <div class="text-slate-500">{{ t(request, "portal.seats.passenger") }}</div>
+                <div class="font-medium">{{ booking.first_name or "" }} {{ booking.last_name or "" }}</div>
+              </div>
+
+              <div>
+                <div class="text-slate-500">{{ t(request, "portal.seats.route") }}</div>
+                <div class="font-medium">{{ booking.route_from or "—" }} → {{ booking.route_to or "—" }}</div>
+              </div>
+
+              <div>
+                <div class="text-slate-500">{{ t(request, "portal.seats.bus_direction") }}</div>
+                <div class="font-medium">{{ booking.bus_from or "—" }} → {{ booking.bus_to or "—" }}</div>
+              </div>
+
+              <div>
+                <div class="text-slate-500">{{ t(request, "portal.seats.required_seats") }}</div>
+                <div class="font-medium">{{ passenger_count }}</div>
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <div class="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <div class="text-slate-500">{{ t(request, "portal.seats.seats") }}</div>
+                  <div class="text-xs text-slate-500 mt-1">
+                    <span id="selectedCountInline">0</span> / {{ passenger_count }} {{ t(request, "portal.seats.selected_suffix") }}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  id="resetSelectionBtn"
+                  class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  {{ t(request, "portal.seats.reset") }}
+                </button>
+              </div>
+
+              <div id="selectedSeatsWrap" class="flex flex-wrap gap-2 min-h-[40px]"></div>
+            </div>
+
+            <div class="grid grid-cols-1 gap-3 pt-1">
+              <button
+                type="submit"
+                id="assignSeatsBtn"
+                class="inline-flex items-center justify-center rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed">
+                {{ t(request, "portal.seats.assign_button") }}
+              </button>
+
+              <button
+                type="button"
+                id="refreshSeatsBtn"
+                class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                {{ t(request, "portal.seats.refresh_button") }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div class="border-b border-slate-200 px-5 py-4">
+            <h2 class="text-lg font-semibold">{{ t(request, "portal.seats.important_title") }}</h2>
+          </div>
+          <div class="p-5 text-sm text-slate-600 space-y-2">
+            <p>{{ t(request, "portal.seats.important_p1") }}</p>
+            <p>{{ t(request, "portal.seats.important_p2") }}</p>
+            <p>{{ t(request, "portal.seats.important_p3_before") }} <span class="font-semibold text-slate-900">{{ t(request, "portal.seats.refresh_button") }}</span> {{ t(request, "portal.seats.important_p3_after") }}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+</div>
+
+<style>
+  .seat-map{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+
+  .seat-row{
+    display:grid;
+    grid-template-columns:repeat(14, minmax(0, 1fr));
+    gap:8px;
+  }
+
+  .seat-cell{
+    height:42px;
+    border-radius:14px;
+    border:1px solid #cbd5e1;
+    font-size:14px;
+    font-weight:600;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:#fff;
+    color:#334155;
+    width:100%;
+  }
+
+  .seat-btn{
+    cursor:pointer;
+    transition:all .15s ease;
+  }
+
+  .seat-btn:hover{
+    background:#f8fafc;
+  }
+
+  .seat-cell.taken{
+    background:#fee2e2;
+    color:#b91c1c;
+    border-color:#fca5a5;
+    cursor:not-allowed;
+  }
+
+  .seat-cell.selected{
+    border-color:#86efac;
+    background:#ecfdf5;
+    color:#047857;
+  }
+
+  .seat-cell.empty{
+    background:transparent;
+    border-color:transparent;
+  }
+
+  @media (max-width: 768px){
+    .seat-row{
+      gap:6px;
+    }
+
+    .seat-cell{
+      height:38px;
+      font-size:12px;
+      border-radius:12px;
+    }
+  }
+</style>
+
+<script>
+(function () {
+  const requiredCount = {{ passenger_count | int }};
+
+  const I18N = {
+    seatLabel: {{ t(request, "portal.seats.js.seat_label") | tojson }},
+    noSeatsSelected: {{ t(request, "portal.seats.js.no_seats_selected") | tojson }},
+    takenSeat: {{ t(request, "portal.seats.js.taken_seat") | tojson }},
+    selectOnlyPrefix: {{ t(request, "portal.seats.js.select_only_prefix") | tojson }},
+    selectOnlySuffix: {{ t(request, "portal.seats.js.select_only_suffix") | tojson }},
+    refreshing: {{ t(request, "portal.seats.js.refreshing") | tojson }},
+    refreshDefault: {{ t(request, "portal.seats.refresh_button") | tojson }},
+    removedUnavailable: {{ t(request, "portal.seats.js.removed_unavailable") | tojson }},
+    refreshedOk: {{ t(request, "portal.seats.js.refreshed_ok") | tojson }},
+    refreshFailedPrefix: {{ t(request, "portal.seats.js.refresh_failed_prefix") | tojson }},
+    selectionCleared: {{ t(request, "portal.seats.js.selection_cleared") | tojson }}
+  };
+
+  function normalizeSeatValue(value) {
+    let s = String(value ?? "").trim();
+    if (!s) return "";
+
+    if (/^\d+\.0+$/.test(s)) {
+      s = s.replace(/\.0+$/, "");
+    }
+
+    return s;
+  }
+
+  function normalizeSeatList(arr) {
+    const out = [];
+    const seen = new Set();
+
+    for (const item of (arr || [])) {
+      const s = normalizeSeatValue(item);
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+
+    return out;
+  }
+
+  let selectedSeats = normalizeSeatList({{ selected_seats | tojson }});
+  let takenSeats = normalizeSeatList({{ taken_seats | tojson }});
+
+  const seatButtons = Array.from(document.querySelectorAll(".seat-btn"));
+  const selectedSeatsWrap = document.getElementById("selectedSeatsWrap");
+  const seatInputs = document.getElementById("seatInputs");
+  const selectedCountTop = document.getElementById("selectedCountTop");
+  const selectedCountInline = document.getElementById("selectedCountInline");
+  const assignBtn = document.getElementById("assignSeatsBtn");
+  const resetBtn = document.getElementById("resetSelectionBtn");
+  const refreshBtn = document.getElementById("refreshSeatsBtn");
+  const jsInfoBox = document.getElementById("jsInfoBox");
+
+  function showInfo(message, variant) {
+    if (!jsInfoBox) return;
+
+    jsInfoBox.className = "mb-4 rounded-xl border px-4 py-3 text-sm";
+
+    if (variant === "success") {
+      jsInfoBox.classList.add("border-emerald-200", "bg-emerald-50", "text-emerald-800");
+    } else if (variant === "error") {
+      jsInfoBox.classList.add("border-rose-200", "bg-rose-50", "text-rose-800");
+    } else {
+      jsInfoBox.classList.add("border-slate-200", "bg-slate-50", "text-slate-700");
+    }
+
+    jsInfoBox.textContent = message;
+    jsInfoBox.classList.remove("hidden");
+  }
+
+  function hideInfo() {
+    if (!jsInfoBox) return;
+    jsInfoBox.textContent = "";
+    jsInfoBox.classList.add("hidden");
+  }
+
+  function renderSelectedSeats() {
+    selectedSeats = normalizeSeatList(selectedSeats);
+
+    if (!selectedSeats.length) {
+      selectedSeatsWrap.innerHTML = `<span class="text-slate-400">${I18N.noSeatsSelected}</span>`;
+    } else {
+      selectedSeatsWrap.innerHTML = selectedSeats.map(seat => `
+        <span class="inline-flex rounded-xl bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 border border-emerald-200">
+          ${I18N.seatLabel} ${seat}
+        </span>
+      `).join("");
+    }
+
+    seatInputs.innerHTML = selectedSeats.map(seat => `
+      <input type="hidden" name="seat_nos" value="${seat}">
+    `).join("");
+
+    selectedCountTop.textContent = String(selectedSeats.length);
+    selectedCountInline.textContent = String(selectedSeats.length);
+    assignBtn.disabled = selectedSeats.length !== requiredCount;
+  }
+
+  function renderSeatMap() {
+    const taken = new Set(normalizeSeatList(takenSeats));
+    const selected = new Set(normalizeSeatList(selectedSeats));
+
+    seatButtons.forEach((btn) => {
+      const seat = normalizeSeatValue(btn.dataset.seat || "");
+      btn.classList.remove("taken", "selected");
+
+      if (taken.has(seat) && !selected.has(seat)) {
+        btn.classList.add("taken");
+        btn.disabled = true;
+        return;
+      }
+
+      btn.disabled = false;
+
+      if (selected.has(seat)) {
+        btn.classList.add("selected");
+      }
+    });
+  }
+
+  function rerender() {
+    renderSelectedSeats();
+    renderSeatMap();
+  }
+
+  function toggleSeat(seat) {
+    hideInfo();
+
+    const seatStr = normalizeSeatValue(seat);
+    if (!seatStr) return;
+
+    const taken = new Set(normalizeSeatList(takenSeats));
+    const selected = new Set(normalizeSeatList(selectedSeats));
+
+    if (taken.has(seatStr) && !selected.has(seatStr)) {
+      showInfo(I18N.takenSeat, "error");
+      return;
+    }
+
+    if (selected.has(seatStr)) {
+      selectedSeats = selectedSeats.filter(x => normalizeSeatValue(x) !== seatStr);
+      rerender();
+      return;
+    }
+
+    if (selectedSeats.length >= requiredCount) {
+      showInfo(`${I18N.selectOnlyPrefix} ${requiredCount} ${I18N.selectOnlySuffix}`, "error");
+      return;
+    }
+
+    selectedSeats.push(seatStr);
+    rerender();
+  }
+
+  async function refreshAvailability() {
+    hideInfo();
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = I18N.refreshing;
+
+    try {
+      const res = await fetch("/portal/seats/state", {
+        credentials: "same-origin",
+        cache: "no-store"
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.detail || "Refresh failed");
+      }
+
+      const oldSelected = normalizeSeatList(selectedSeats);
+      takenSeats = normalizeSeatList(data.taken_seats || []);
+
+      const taken = new Set(takenSeats);
+      selectedSeats = oldSelected.filter(seat => !taken.has(seat));
+
+      rerender();
+
+      if (oldSelected.length !== selectedSeats.length) {
+        showInfo(I18N.removedUnavailable, "error");
+      } else {
+        showInfo(I18N.refreshedOk, "success");
+      }
+    } catch (err) {
+      showInfo(I18N.refreshFailedPrefix + (err.message || err), "error");
+    } finally {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = I18N.refreshDefault;
+    }
+  }
+
+  seatButtons.forEach((btn) => {
+    btn.addEventListener("click", function () {
+      toggleSeat(this.dataset.seat);
+    });
+  });
+
+  resetBtn.addEventListener("click", function (event) {
+    event.preventDefault();
+    hideInfo();
+    selectedSeats = [];
+    rerender();
+    showInfo(I18N.selectionCleared, "success");
+  });
+
+  refreshBtn.addEventListener("click", function (event) {
+    event.preventDefault();
+    refreshAvailability();
+  });
+
+  rerender();
+})();
+</script>
+
+{% endblock %}

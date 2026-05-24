@@ -1,0 +1,20 @@
+passengers_py
+  app
+    __init__.py
+    main.py
+    db.py
+    models.py
+    schemas.py
+    excel_import.py
+    crud.py
+    templates
+      base.html
+      trips.html
+      trip_detail.html
+    static
+      app.js
+      styles.css
+  alembic.ini
+  requirements.txt
+  Dockerfile
+  docker-compose.yml

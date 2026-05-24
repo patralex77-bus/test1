@@ -1,0 +1,585 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% set active_trip_id = trip_id or request.query_params.get('trip_id') %}
+
+<div class="max-w-5xl mx-auto">
+  <div class="flex items-center justify-between gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl font-bold tracking-tight">QR scan / Check-in</h1>
+      <p class="text-sm text-slate-500 mt-1">
+        Сканирай QR кода с камерата, провери пътника и избери действие.
+      </p>
+    </div>
+
+    <a href="{% if active_trip_id %}/drivers/trips/{{ active_trip_id }}{% else %}/drivers{% endif %}"
+       class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+      ← Back to drivers
+    </a>
+  </div>
+
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Camera scanner</h2>
+      </div>
+
+      <div class="p-5">
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Camera</label>
+            <select id="cameraSelect"
+                    class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">Loading cameras...</option>
+            </select>
+          </div>
+
+          <div class="flex flex-wrap gap-3">
+            <button type="button"
+                    id="startScanBtn"
+                    class="inline-flex items-center rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">
+              Start camera
+            </button>
+
+            <button type="button"
+                    id="stopScanBtn"
+                    class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    disabled>
+              Stop camera
+            </button>
+          </div>
+
+          <div id="scannerStatus"
+               class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            Камерата още не е стартирана.
+          </div>
+
+          <div id="reader"
+               class="overflow-hidden rounded-2xl border border-slate-200 bg-black min-h-[320px]"></div>
+
+          <div class="text-xs text-slate-500">
+            При успешно сканиране payload-ът ще се попълни автоматично и ще се изпрати за проверка.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Manual / fallback</h2>
+      </div>
+
+      <div class="p-5">
+        <form method="post"
+              action="/drivers/scan{% if active_trip_id %}?trip_id={{ active_trip_id }}{% endif %}"
+              class="space-y-4"
+              id="scanForm">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">QR payload</label>
+            <textarea
+              id="qrPayload"
+              name="qr_payload"
+              rows="10"
+              placeholder='{"type":"boarding_ticket", ... }'
+              class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+            >{{ payload_text or "" }}</textarea>
+          </div>
+
+          <div class="flex flex-wrap gap-3">
+            <button
+              type="submit"
+              class="inline-flex items-center rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700">
+              Прочети QR
+            </button>
+
+            <button
+              type="button"
+              id="clearPayloadBtn"
+              class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              Изчисти
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {% if result %}
+    <div class="mt-6 rounded-2xl border {% if result.ok %}border-emerald-200 bg-emerald-50{% else %}border-rose-200 bg-rose-50{% endif %} shadow-sm">
+      <div class="px-5 py-4">
+        <div class="font-semibold {% if result.ok %}text-emerald-800{% else %}text-rose-800{% endif %}">
+          {{ result.message }}
+        </div>
+      </div>
+    </div>
+
+    {% if result.parsed_payload %}
+      <div class="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-6">
+
+        <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div class="border-b border-slate-200 px-5 py-4">
+            <h2 class="text-lg font-semibold">Parsed payload</h2>
+          </div>
+          <div class="p-5">
+            <pre class="whitespace-pre-wrap text-xs leading-6 text-slate-700">{{ result.parsed_payload | tojson(indent=2) }}</pre>
+          </div>
+        </div>
+
+        {% if result.booking %}
+        <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div class="border-b border-slate-200 px-5 py-4">
+            <h2 class="text-lg font-semibold">Booking</h2>
+          </div>
+
+          <div class="p-5 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div>
+              <div class="text-slate-500">Booking ID</div>
+              <div class="font-medium">{{ result.booking.id }}</div>
+            </div>
+
+            <div>
+              <div class="text-slate-500">Unique ID</div>
+              <div class="font-medium">{{ result.booking.external_id }}</div>
+            </div>
+
+            <div>
+              <div class="text-slate-500">Passenger</div>
+              <div class="font-medium">{{ result.booking.first_name or "" }} {{ result.booking.last_name or "" }}</div>
+            </div>
+
+            <div>
+              <div class="text-slate-500">Seat</div>
+              <div class="font-medium">
+                {{ result.parsed_payload.seat_no if result.parsed_payload and result.parsed_payload.seat_no else "—" }}
+              </div>
+            </div>
+
+            <div>
+              <div class="text-slate-500">Direction</div>
+              <div class="font-medium">
+                {{ result.booking.route_from or "—" }} → {{ result.booking.route_to or "—" }}
+              </div>
+            </div>
+
+            <div>
+              <div class="text-slate-500">Payment status</div>
+              <div class="font-medium">{{ result.booking.payment_status or "—" }}</div>
+            </div>
+
+            {% if result.passenger %}
+            <div>
+              <div class="text-slate-500">Passenger row ID</div>
+              <div class="font-medium">{{ result.passenger.id }}</div>
+            </div>
+
+            <div>
+              <div class="text-slate-500">Trip ID</div>
+              <div class="font-medium">{{ result.passenger.trip_id }}</div>
+            </div>
+            {% endif %}
+
+            {% if result.passenger and result.passenger.trip_id %}
+            <div class="md:col-span-2 pt-2">
+              <a href="/drivers/trips/{{ result.passenger.trip_id }}"
+                 class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                Отвори рейса →
+              </a>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    {% if result.booking and result.passenger and result.parsed_payload %}
+      <div class="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-200 px-5 py-4">
+          <h2 class="text-lg font-semibold">Action</h2>
+        </div>
+
+        <div class="p-5 grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div class="text-sm font-semibold text-slate-900 mb-3">1. Чекирай пътника</div>
+
+            <form method="post"
+                  action="/drivers/scan/action{% if active_trip_id %}?trip_id={{ active_trip_id }}{% endif %}"
+                  class="space-y-3">
+              <input type="hidden" name="action" value="checkin">
+              <input type="hidden" name="qr_payload" value='{{ payload_text or "" }}'>
+
+              <button
+                type="submit"
+                class="inline-flex items-center rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700">
+                Чекирай
+              </button>
+            </form>
+          </div>
+
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div class="text-sm font-semibold text-slate-900 mb-3">2. Каса</div>
+
+            <form method="post"
+                  action="/drivers/scan/action{% if active_trip_id %}?trip_id={{ active_trip_id }}{% endif %}"
+                  class="space-y-3">
+              <input type="hidden" name="action" value="cash">
+              <input type="hidden" name="qr_payload" value='{{ payload_text or "" }}'>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-sm font-medium text-slate-700 mb-1">Сума</label>
+                  <input
+                    type="number"
+                    name="cash_amount"
+                    step="0.01"
+                    min="0"
+                    class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                    placeholder="0.00"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label class="block text-sm font-medium text-slate-700 mb-1">Валута</label>
+                  <select
+                    name="cash_currency"
+                    class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm">
+                    <option value="EUR">EUR</option>
+                    <option value="UAH">UAH</option>
+                  </select>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                class="inline-flex items-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
+                Запиши в каса
+              </button>
+            </form>
+          </div>
+
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div class="text-sm font-semibold text-slate-900 mb-3">3. Провери ÖBB карта</div>
+
+            <form method="post"
+                  action="/drivers/scan/action{% if active_trip_id %}?trip_id={{ active_trip_id }}{% endif %}"
+                  class="space-y-3">
+              <input type="hidden" name="action" value="oebb">
+              <input type="hidden" name="qr_payload" value='{{ payload_text or "" }}'>
+
+              <button
+                type="submit"
+                class="inline-flex items-center rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-amber-600">
+                Провери ÖBB
+              </button>
+            </form>
+          </div>
+
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div class="text-sm font-semibold text-slate-900 mb-3">4. Откажи чекиране</div>
+
+            <form method="post"
+                  action="/drivers/scan/action{% if active_trip_id %}?trip_id={{ active_trip_id }}{% endif %}"
+                  class="space-y-3">
+              <input type="hidden" name="action" value="refuse">
+              <input type="hidden" name="qr_payload" value='{{ payload_text or "" }}'>
+
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Причина</label>
+                <input
+                  type="text"
+                  name="refuse_reason"
+                  class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="напр. грешен билет / отказ / дубликат"
+                />
+              </div>
+
+              <button
+                type="submit"
+                class="inline-flex items-center rounded-xl bg-rose-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-rose-700">
+                Откажи чекиране
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if result.passenger %}
+      <div class="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-200 px-5 py-4">
+          <h2 class="text-lg font-semibold">Passenger state</h2>
+        </div>
+
+        <div class="p-5 overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead class="border-b border-slate-200">
+              <tr class="text-left">
+                <th class="px-3 py-2 font-semibold">ID</th>
+                <th class="px-3 py-2 font-semibold">Name</th>
+                <th class="px-3 py-2 font-semibold">Seat</th>
+                <th class="px-3 py-2 font-semibold">Checked-in</th>
+                <th class="px-3 py-2 font-semibold">Paid</th>
+                <th class="px-3 py-2 font-semibold">Amount</th>
+                <th class="px-3 py-2 font-semibold">OEBB</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200">
+              <tr>
+                <td class="px-3 py-2">{{ result.passenger.id }}</td>
+                <td class="px-3 py-2">{{ result.passenger.full_name or "—" }}</td>
+                <td class="px-3 py-2">{{ result.passenger.seat_no or "—" }}</td>
+                <td class="px-3 py-2">{{ "yes" if result.passenger.checked_in else "no" }}</td>
+                <td class="px-3 py-2">{{ "yes" if result.passenger.paid else "no" }}</td>
+                <td class="px-3 py-2">
+                  {% if result.passenger.amount is not none %}
+                    {{ result.passenger.amount }} {{ result.passenger.currency or "" }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td class="px-3 py-2">{{ "yes" if result.passenger.oebb else "no" }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {% if result.boarding_state %}
+        <div class="border-t border-slate-200 px-5 py-4 text-sm text-slate-700">
+          <div><b>Boarding status:</b> {{ result.boarding_state.boarding_status or "—" }}</div>
+          <div><b>Refused reason:</b> {{ result.boarding_state.refused_reason or "—" }}</div>
+          <div><b>OEBB checked:</b> {{ "yes" if result.boarding_state.oebb_checked else "no" }}</div>
+          <div><b>Cash:</b>
+            {% if result.boarding_state.cash_collected_amount is not none %}
+              {{ result.boarding_state.cash_collected_amount }} {{ result.boarding_state.cash_collected_currency or "" }}
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    {% endif %}
+  {% endif %}
+</div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/minified/html5-qrcode.min.js"></script>
+<script>
+(function () {
+  const qrPayload = document.getElementById("qrPayload");
+  const scanForm = document.getElementById("scanForm");
+  const startBtn = document.getElementById("startScanBtn");
+  const stopBtn = document.getElementById("stopScanBtn");
+  const clearBtn = document.getElementById("clearPayloadBtn");
+  const cameraSelect = document.getElementById("cameraSelect");
+  const scannerStatus = document.getElementById("scannerStatus");
+
+  let qrScanner = null;
+  let scanning = false;
+  let availableCameras = [];
+  let autoStartDone = false;
+
+  function setStatus(text, isError = false) {
+    if (!scannerStatus) return;
+    scannerStatus.textContent = text;
+    scannerStatus.className = isError
+      ? "rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+      : "rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600";
+  }
+
+  function pickBestCamera(cameras) {
+    if (!cameras || !cameras.length) return "";
+
+    const preferred = cameras.find(c =>
+      /back|rear|environment|trás|tras|rück|world/i.test(c.label || "")
+    );
+    if (preferred) return preferred.id;
+
+    return cameras[0].id;
+  }
+
+  async function waitForQrLib(maxWaitMs = 5000) {
+    const started = Date.now();
+    while (!window.Html5Qrcode) {
+      if (Date.now() - started > maxWaitMs) return false;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return true;
+  }
+
+  async function loadCameras() {
+    const ok = await waitForQrLib();
+    if (!ok) {
+      setStatus("QR library не се зареди.", true);
+      return;
+    }
+
+    try {
+      const cameras = await Html5Qrcode.getCameras();
+      availableCameras = cameras || [];
+
+      cameraSelect.innerHTML = "";
+
+      if (!availableCameras.length) {
+        cameraSelect.innerHTML = '<option value="">No camera found</option>';
+        setStatus("Не е намерена камера.", true);
+        return;
+      }
+
+      availableCameras.forEach((cam, idx) => {
+        const opt = document.createElement("option");
+        opt.value = cam.id;
+        opt.textContent = cam.label || `Camera ${idx + 1}`;
+        cameraSelect.appendChild(opt);
+      });
+
+      const bestId = pickBestCamera(availableCameras);
+      if (bestId) {
+        cameraSelect.value = bestId;
+      }
+
+      setStatus("Избери камера или натисни Start camera.");
+    } catch (err) {
+      console.error(err);
+      setStatus("Няма достъп до камерата или браузърът я блокира.", true);
+    }
+  }
+
+async function startScanner() {
+  const ok = await waitForQrLib();
+  if (!ok) {
+    setStatus("QR library is still loading. Try again.", true);
+    return;
+  }
+
+  const cameraId = cameraSelect.value;
+  if (!cameraId) {
+    setStatus("Моля избери камера.", true);
+    return;
+  }
+
+  try {
+    if (qrScanner && scanning) {
+      await stopScanner();
+    }
+
+    if (!qrScanner) {
+      qrScanner = new Html5Qrcode("reader");
+    }
+
+    const config = {
+      fps: 10,
+      qrbox: { width: 260, height: 260 },
+      aspectRatio: 1.0
+    };
+
+    try {
+      await qrScanner.start(
+        { deviceId: { exact: cameraId } },
+        config,
+        (decodedText) => {
+          if (qrPayload) qrPayload.value = decodedText;
+          setStatus("QR кодът е прочетен успешно.");
+          stopScanner().finally(() => {
+            if (scanForm) scanForm.submit();
+          });
+        },
+        () => {}
+      );
+    } catch (e) {
+      await qrScanner.start(
+        { facingMode: "environment" },
+        config,
+        (decodedText) => {
+          if (qrPayload) qrPayload.value = decodedText;
+          setStatus("QR кодът е прочетен успешно.");
+          stopScanner().finally(() => {
+            if (scanForm) scanForm.submit();
+          });
+        },
+        () => {}
+      );
+    }
+
+    scanning = true;
+    if (startBtn) startBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = false;
+    setStatus("Камерата е активна. Насочи QR кода в рамката.");
+  } catch (err) {
+    console.error(err);
+    setStatus("Неуспешно стартиране на камерата. Разреши camera access.", true);
+  }
+}
+
+  async function stopScanner() {
+    try {
+      if (qrScanner && scanning) {
+        await qrScanner.stop();
+        await qrScanner.clear();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      scanning = false;
+      if (startBtn) startBtn.disabled = false;
+      if (stopBtn) stopBtn.disabled = true;
+    }
+  }
+
+  startBtn?.addEventListener("click", startScanner);
+  stopBtn?.addEventListener("click", stopScanner);
+
+  clearBtn?.addEventListener("click", () => {
+    if (qrPayload) qrPayload.value = "";
+    setStatus("Payload е изчистен.");
+  });
+
+  cameraSelect?.addEventListener("change", async () => {
+    if (scanning) {
+      await startScanner();
+    }
+  });
+
+  window.addEventListener("load", async () => {
+    setStatus("Зареждане на камера...");
+    await loadCameras();
+
+    if (!autoStartDone && cameraSelect?.value) {
+      autoStartDone = true;
+      setTimeout(() => {
+        startScanner().catch(console.error);
+      }, 300);
+    }
+  });
+
+  window.addEventListener("beforeunload", () => {
+    if (qrScanner && scanning) {
+      qrScanner.stop().catch(() => {});
+    }
+  });
+})();
+</script>
+
+<style>
+@media print {
+  .print\:hidden {
+    display: none !important;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  .max-w-5xl {
+    max-width: 100% !important;
+  }
+}
+
+#reader video {
+  border-radius: 16px;
+  width: 100% !important;
+  height: auto !important;
+}
+</style>
+
+{% endblock %}

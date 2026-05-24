@@ -1,0 +1,443 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="flex items-start justify-between gap-3">
+  <div>
+    <h1 class="text-xl font-semibold tracking-tight">Курсове</h1>
+    <p class="text-sm text-slate-500">Избери дата от календара и направление. Резюмето показва пътниците за рейсовете в избрания ден.</p>
+  </div>
+</div>
+
+<!-- ====== КАЛЕНДАР + РЕЗЮМЕ ЗА ДЕНЯ ====== -->
+<div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+  <!-- Календар -->
+  <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+    <div class="flex items-center justify-between">
+      <button id="calPrev"
+        class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold active:scale-[0.99]">
+        ←
+      </button>
+
+      <div class="text-sm font-semibold text-slate-800" id="calTitle">—</div>
+
+      <button id="calNext"
+        class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold active:scale-[0.99]">
+        →
+      </button>
+    </div>
+
+    <div class="mt-3 grid grid-cols-7 gap-2 text-xs font-semibold text-slate-500">
+      <div class="text-center">Пн</div><div class="text-center">Вт</div><div class="text-center">Ср</div>
+      <div class="text-center">Чт</div><div class="text-center">Пт</div><div class="text-center">Сб</div><div class="text-center">Нд</div>
+    </div>
+
+    <div class="mt-2 grid grid-cols-7 gap-2" id="calGrid"></div>
+
+    <div class="mt-3 flex flex-wrap gap-2 text-xs">
+      <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+        <span class="h-3 w-3 rounded-sm" style="background:#fee2e2"></span> Innsbruck → Kyiv
+      </span>
+      <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+        <span class="h-3 w-3 rounded-sm" style="background:#dbeafe"></span> Kyiv → Innsbruck
+      </span>
+      <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+        <span class="h-3 w-3 rounded-sm" style="background:linear-gradient(135deg,#fee2e2 0 50%,#dbeafe 50% 100%)"></span> И двата
+      </span>
+    </div>
+  </div>
+
+  <!-- Резюме за избрания ден (1 или 2 курса) -->
+  <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+    <div class="flex items-center justify-between">
+      <div class="text-sm font-semibold text-slate-800">Резюме (пътници)</div>
+      <div class="text-xs text-slate-500" id="monthHint">—</div>
+    </div>
+
+    <!-- Тук се рендерират 1 или 2 резюмета -->
+    <div class="mt-3 space-y-3" id="summaryWrap"></div>
+
+    <div class="mt-3 text-xs text-slate-500">
+      Избери ден от календара, за да видиш резюме за рейсовете в този ден.
+    </div>
+  </div>
+</div>
+
+<!-- ====== СЪЗДАВАНЕ НА КУРС (2 бутона + дата + бележка) ====== -->
+<div class="mt-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+  <form method="post" action="/trips" class="space-y-3" id="quickTripForm">
+    <input type="hidden" name="route_from" id="route_from" />
+    <input type="hidden" name="route_to" id="route_to" />
+    <input type="hidden" name="date_time" id="date_time" />
+
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div class="sm:col-span-1">
+        <label class="mb-1 block text-xs font-medium text-slate-600">Дата</label>
+        <input id="dateOnly" type="date" required
+               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-slate-400" />
+      </div>
+
+      <div class="sm:col-span-2">
+        <label class="mb-1 block text-xs font-medium text-slate-600">Бележка</label>
+        <input name="note" placeholder="бус/шофьор"
+               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-slate-400" />
+      </div>
+    </div>
+
+    <div>
+      <label class="mb-1 block text-xs font-medium text-slate-600">Направление</label>
+      <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <button type="button" data-from="Innsbruck" data-to="Kyiv"
+                class="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-base font-medium text-white shadow-sm active:scale-[0.99]">
+          Innsbruck → Kyiv
+        </button>
+
+        <button type="button" data-from="Kyiv" data-to="Innsbruck"
+                class="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-base font-semibold text-slate-900 shadow-sm active:scale-[0.99]">
+          Kyiv → Innsbruck
+        </button>
+      </div>
+      <p class="mt-2 text-xs text-slate-500">Кликни дата от календара или избери ръчно, после натисни направление.</p>
+    </div>
+  </form>
+</div>
+
+<!-- ====== СПИСЪК ====== -->
+<div class="mt-5">
+  <div class="flex items-center justify-between">
+    <h2 class="text-sm font-semibold text-slate-700">Списък</h2>
+    <span class="text-xs text-slate-500">{{ trips|length }} курса</span>
+  </div>
+
+  <div class="mt-2 space-y-2">
+    {% for t in trips %}
+      <div class="block rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+        <div class="flex items-start justify-between gap-3">
+          <a href="/trips/{{ t.id }}" class="min-w-0 flex-1 active:opacity-80">
+            <div class="truncate text-base font-semibold">
+              {{ t.route_from or "?" }} → {{ t.route_to or "?" }}
+            </div>
+            <div class="mt-1 text-sm text-slate-500">
+              {% if t.note %}{{ t.note }}{% else %}&nbsp;{% endif %}
+            </div>
+          </a>
+
+          <div class="shrink-0 text-right">
+            <div class="text-xs font-medium text-slate-600">#{{ t.id }}</div>
+            <div class="mt-1 text-xs text-slate-500">
+              {{ t.date_time.strftime("%Y-%m-%d") if t.date_time else "" }}
+            </div>
+
+            <form method="post" action="/trips/{{ t.id }}/delete" class="mt-2"
+                  onsubmit="return confirm('Да изтрия ли този курс?');">
+              <button type="submit"
+                class="rounded-xl border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 active:scale-[0.99]">
+                Изтрий
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    {% else %}
+      <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
+        Няма курсове. Създай първия от формата по-горе.
+      </div>
+    {% endfor %}
+  </div>
+</div>
+
+<style>
+  /* клетките на календара */
+  .cal-day{
+    height: 46px;
+    border: 1px solid #e2e8f0; /* slate-200 */
+    border-radius: 14px;
+    background: #fff;
+    display:flex;
+    align-items:flex-start;
+    justify-content:flex-end;
+    padding: 8px 8px 6px 8px;
+    font-weight: 400;      /* ✅ не bold */
+    font-size: 13px;
+    color:#0f172a; /* slate-900 */
+    user-select:none;
+  }
+  .cal-day.muted{
+    color:#94a3b8; /* slate-400 */
+    background:#fafafa;
+  }
+  .cal-day.selected{
+    outline: 2px solid #0f172a;
+    outline-offset: 1px;
+  }
+</style>
+
+<script>
+  // ====== Данните от Jinja -> JS ======
+  const TRIPS = [
+    {% for t in trips %}
+      {% set d = t.date_time.strftime("%Y-%m-%d") if t.date_time else "" %}
+      {% set rf = (t.route_from or "") %}
+      {% set rt = (t.route_to or "") %}
+      {% if d %}
+        {
+          id: {{ t.id }},
+          date: "{{ d }}",
+          from: "{{ rf }}",
+          to: "{{ rt }}",
+          dir:
+            {% if rf|lower == "innsbruck"|lower and rt|lower == "kyiv"|lower %}
+              "red"
+            {% elif rf|lower == "kyiv"|lower and rt|lower == "innsbruck"|lower %}
+              "blue"
+            {% else %}
+              "other"
+            {% endif %}
+        },
+      {% endif %}
+    {% endfor %}
+  ];
+
+  // Map по дата -> {red, blue} за оцветяване на календар
+  const tripMap = new Map();
+  for (const t of TRIPS) {
+    if (!t.date || t.dir === "other") continue;
+    const cur = tripMap.get(t.date) || { red:false, blue:false };
+    if (t.dir === "red") cur.red = true;
+    if (t.dir === "blue") cur.blue = true;
+    tripMap.set(t.date, cur);
+  }
+
+  function ymd(dt){
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth()+1).padStart(2,"0");
+    const d = String(dt.getDate()).padStart(2,"0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function startOfCalendarMonth(year, monthIndex){
+    // понеделник като първи ден
+    const first = new Date(year, monthIndex, 1);
+    const dow = (first.getDay()+6)%7; // 0=Mon ... 6=Sun
+    const start = new Date(year, monthIndex, 1 - dow);
+    start.setHours(0,0,0,0);
+    return start;
+  }
+
+  function renderCalendar(viewDate){
+    const grid = document.getElementById("calGrid");
+    const title = document.getElementById("calTitle");
+    if (!grid || !title) return;
+
+    const year = viewDate.getFullYear();
+    const month = viewDate.getMonth();
+    const monthName = viewDate.toLocaleString("bg-BG", { month: "long", year: "numeric" });
+    title.textContent = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+
+    grid.innerHTML = "";
+
+    const start = startOfCalendarMonth(year, month);
+    const selected = document.getElementById("dateOnly")?.value || "";
+
+    for (let i=0;i<42;i++){
+      const day = new Date(start);
+      day.setDate(start.getDate()+i);
+
+      const inMonth = day.getMonth() === month;
+      const key = ymd(day);
+      const info = tripMap.get(key); // {red,blue} или undefined
+
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "cal-day" + (inMonth ? "" : " muted") + (selected === key ? " selected" : "");
+      cell.textContent = String(day.getDate());
+
+      // Оцветяване
+      if (info?.red && info?.blue) {
+        cell.style.background = "linear-gradient(135deg,#fee2e2 0 50%,#dbeafe 50% 100%)";
+      } else if (info?.red) {
+        cell.style.background = "#fee2e2"; // light red
+      } else if (info?.blue) {
+        cell.style.background = "#dbeafe"; // light blue
+      }
+
+      // Клик -> попълва датата + рендер резюме
+      cell.addEventListener("click", () => {
+        const dateOnly = document.getElementById("dateOnly");
+        if (dateOnly) dateOnly.value = key;
+        renderCalendar(viewDate);        // обнови outline
+        renderSummaryForDay(key);        // ✅ резюме за деня
+      });
+
+      grid.appendChild(cell);
+    }
+  }
+
+  // ====== РЕЗЮМЕ ЗА ДЕНЯ (по пътници) ======
+  function escapeHtml(s){
+    return String(s ?? "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  function dirLabel(t){
+    if (t.dir === "red") return "Innsbruck → Kyiv";
+    if (t.dir === "blue") return "Kyiv → Innsbruck";
+    return `${t.from} → ${t.to}`;
+  }
+
+  function dirBadgeStyle(t){
+    if (t.dir === "red") return `background:#fee2e2;color:#7f1d1d;border:1px solid #fecaca;`;
+    if (t.dir === "blue") return `background:#dbeafe;color:#1e3a8a;border:1px solid #bfdbfe;`;
+    return `background:#f1f5f9;color:#0f172a;border:1px solid #e2e8f0;`;
+  }
+
+  async function fetchTripSummary(tripId){
+    const res = await fetch(`/api/trips/${tripId}/summary`);
+    if (!res.ok) throw new Error("summary failed");
+    return await res.json();
+  }
+
+  function renderOneSummary(root, trip, summary){
+    const fromRows = (summary.from || []).slice().sort((a,b)=> b.count-a.count || a.city.localeCompare(b.city));
+    const toRows = (summary.to || []).slice().sort((a,b)=> b.count-a.count || a.city.localeCompare(b.city));
+
+    const fromHtml = fromRows.length
+      ? fromRows.map(r=>`<tr class="border-b border-slate-100"><td class="py-1">${escapeHtml(r.city)}</td><td class="py-1 text-right font-semibold">${r.count}</td></tr>`).join("")
+      : `<tr><td class="py-2 text-slate-400" colspan="2">Няма</td></tr>`;
+
+    const toHtml = toRows.length
+      ? toRows.map(r=>`<tr class="border-b border-slate-100"><td class="py-1">${escapeHtml(r.city)}</td><td class="py-1 text-right font-semibold">${r.count}</td></tr>`).join("")
+      : `<tr><td class="py-2 text-slate-400" colspan="2">Няма</td></tr>`;
+
+    root.insertAdjacentHTML("beforeend", `
+      <div class="rounded-2xl border border-slate-200 p-3">
+        <div class="flex items-center justify-between gap-2">
+          <div class="text-xs font-semibold" style="padding:6px 10px;border-radius:999px;${dirBadgeStyle(trip)}">
+            ${escapeHtml(dirLabel(trip))}
+          </div>
+          <a href="/trips/${trip.id}" class="text-xs font-semibold text-slate-600 underline underline-offset-2">Отвори</a>
+        </div>
+
+        <div class="mt-2 text-xs text-slate-500">
+          Общо пътници: <span class="font-semibold text-slate-700">${summary.total ?? 0}</span>
+        </div>
+
+        <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="rounded-2xl border border-slate-200 p-3">
+            <div class="text-xs font-semibold text-slate-700 mb-2">ОТ (бр. пътници)</div>
+            <table class="w-full text-sm">
+              <thead><tr class="text-xs text-slate-500"><th class="text-left font-semibold">Град</th><th class="text-right font-semibold">Брой</th></tr></thead>
+              <tbody>${fromHtml}</tbody>
+            </table>
+          </div>
+
+          <div class="rounded-2xl border border-slate-200 p-3">
+            <div class="text-xs font-semibold text-slate-700 mb-2">ДО (бр. пътници)</div>
+            <table class="w-full text-sm">
+              <thead><tr class="text-xs text-slate-500"><th class="text-left font-semibold">Град</th><th class="text-right font-semibold">Брой</th></tr></thead>
+              <tbody>${toHtml}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+
+  async function renderSummaryForDay(dateStr){
+    const wrap = document.getElementById("summaryWrap");
+    const hint = document.getElementById("monthHint");
+    if (!wrap) return;
+
+    if (hint) hint.textContent = dateStr || "—";
+
+    if (!dateStr){
+      wrap.innerHTML = `<div class="text-xs text-slate-500">Избери дата от календара.</div>`;
+      return;
+    }
+
+    const tripsForDay = TRIPS.filter(t => t.date === dateStr && t.dir !== "other");
+
+    if (tripsForDay.length === 0){
+      wrap.innerHTML = `<div class="text-xs text-slate-500">Няма курсове за избраната дата.</div>`;
+      return;
+    }
+
+    wrap.innerHTML = `<div class="text-xs text-slate-500">Зареждане...</div>`;
+
+    // зареди последователно (по-надеждно)
+    wrap.innerHTML = "";
+    for (const trip of tripsForDay){
+      try{
+        const summary = await fetchTripSummary(trip.id);
+        renderOneSummary(wrap, trip, summary);
+      }catch(e){
+        wrap.insertAdjacentHTML("beforeend", `
+          <div class="rounded-2xl border border-red-200 bg-white p-3 text-sm text-red-600">
+            Грешка при зареждане на резюме за курс #${trip.id}.
+          </div>
+        `);
+      }
+    }
+  }
+
+  // ====== INIT ======
+  (function(){
+    // бутони за бързо създаване (2 направления)
+    const form = document.getElementById("quickTripForm");
+    const dateOnly = document.getElementById("dateOnly");
+    const routeFrom = document.getElementById("route_from");
+    const routeTo = document.getElementById("route_to");
+    const dateTime = document.getElementById("date_time");
+
+    function submitWith(from, to) {
+      const d = (dateOnly?.value || "").trim();
+      if (!d) { alert("Моля избери дата."); return; }
+      routeFrom.value = from;
+      routeTo.value = to;
+      dateTime.value = d + "T00:00";
+      form.submit();
+    }
+
+    form.querySelectorAll("button[data-from][data-to]").forEach(btn => {
+      btn.addEventListener("click", () => submitWith(btn.dataset.from, btn.dataset.to));
+    });
+
+    // календар
+    let viewDate = new Date();
+    viewDate.setDate(1);
+
+    // ако имаме избрана дата - от нея
+    if (dateOnly && dateOnly.value) {
+      const parts = dateOnly.value.split("-");
+      if (parts.length === 3) {
+        viewDate = new Date(Number(parts[0]), Number(parts[1])-1, 1);
+      }
+    }
+
+    renderCalendar(viewDate);
+
+    document.getElementById("calPrev")?.addEventListener("click", () => {
+      viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth()-1, 1);
+      renderCalendar(viewDate);
+    });
+
+    document.getElementById("calNext")?.addEventListener("click", () => {
+      viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth()+1, 1);
+      renderCalendar(viewDate);
+    });
+
+    // ако смениш дата ръчно -> обнови outline + резюме
+    dateOnly?.addEventListener("change", () => {
+      renderCalendar(viewDate);
+      renderSummaryForDay(dateOnly.value || "");
+    });
+
+    // първоначално резюме (ако е избрана дата)
+    renderSummaryForDay(dateOnly?.value || "");
+  })();
+</script>
+
+{% endblock %}

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="max-w-md mx-auto pt-10">
+  <div class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+    <div class="border-b border-slate-200 px-6 py-5">
+      <h1 class="text-2xl font-bold tracking-tight">{{ t(request, "portal.login.title") }}</h1>
+      <p class="text-sm text-slate-500 mt-1">
+        {{ t(request, "portal.login.subtitle") }}
+      </p>
+    </div>
+
+    <div class="p-6">
+      {% if error %}
+        <div class="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+          {% if error == "missing" %}
+            {{ t(request, "portal.login.error_missing") }}
+          {% elif error == "badid" %}
+            {{ t(request, "portal.login.error_badid") }}
+          {% elif error == "invalid" %}
+            {{ t(request, "portal.login.error_invalid") }}
+          {% elif error == "notfound" %}
+            {{ t(request, "portal.login.error_notfound") }}
+          {% else %}
+            {{ t(request, "portal.login.error_generic") }}
+          {% endif %}
+        </div>
+      {% endif %}
+
+      <form method="post" action="/portal/login" class="space-y-4">
+        <input type="hidden" name="next" value="{{ next_url }}">
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">{{ t(request, "portal.login.unique_id") }}</label>
+          <input
+            type="text"
+            name="unique_id"
+            placeholder="1774739893"
+            class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+            required
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">{{ t(request, "portal.login.email") }}</label>
+          <input
+            type="email"
+            name="email"
+            placeholder="name@example.com"
+            class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+            required
+          />
+        </div>
+
+        <div class="pt-2">
+          <button
+            type="submit"
+            class="w-full inline-flex items-center justify-center rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">
+            {{ t(request, "portal.login.submit") }}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

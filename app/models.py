@@ -1,152 +1,345 @@
+from datetime import datetime
 
-from . import db
-from datetime import datetime, date
-from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import Column, Integer, BigInteger, Boolean, DateTime, ForeignKey, Numeric, String, Text, Numeric
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-db = SQLAlchemy()
-
-class PayrollSettings(db.Model):
-    __tablename__ = "payroll_settings"
-    id = db.Column(db.Integer, primary_key=True, default=1)
-    daily_fixed = db.Column(db.Float, nullable=False, default=80.0)        # Дневна ставка FIX
-    hourly_contract = db.Column(db.Float, nullable=False, default=10.0)    # Часова ставка по договор
-    hourly_custom = db.Column(db.Float, nullable=False, default=12.0)      # Часова ставка по договореност
-    min_hours = db.Column(db.Float, nullable=False, default=0.0)           # Мин. заетост/часове
-    max_hours = db.Column(db.Float, nullable=False, default=13.0)          # Макс. заетост/часове (на ден)
-    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    @staticmethod
-    def get_or_create():
-        obj = PayrollSettings.query.get(1)
-        if not obj:
-            obj = PayrollSettings(id=1)
-            db.session.add(obj)
-            db.session.commit()
-        return obj
-
-    def as_dict(self):
-        return {
-            "daily_fixed": self.daily_fixed,
-            "hourly_rate": self.hourly_contract,   # ← използвай това име, ако вече го очакваш в front-end
-            "hourly_contract": self.hourly_contract,
-            "hourly_custom": self.hourly_custom,
-            "min_hours": self.min_hours,
-            "max_hours": self.max_hours,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
+from .db import Base
 
 
-class TimestampMixin:
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+class Trip(Base):
+    __tablename__ = "trips"
 
-class Bus(db.Model, TimestampMixin):
-    __tablename__ = "buses"
-    id = db.Column(db.Integer, primary_key=True)
-    reg_no = db.Column(db.String(32), unique=True, nullable=True)
-    brand = db.Column(db.String(80), nullable=True)
-    bus_class = db.Column(db.String(32), nullable=True)
-    seats = db.Column(db.Integer, nullable=True)
-    odometer_start = db.Column(db.Integer, nullable=True)
-    tech_inspection_date = db.Column(db.Date, nullable=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    date_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    route_from: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    route_to: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    fixed_costs = db.relationship("BusFixedCost", backref="bus", cascade="all, delete-orphan", lazy=True)
-    repairs = db.relationship("BusRepair", backref="bus", cascade="all, delete-orphan", lazy=True)
-    mileages = db.relationship("BusMileage", backref="bus", cascade="all, delete-orphan", lazy=True)
-    fuels = db.relationship("BusFuel", backref="bus", cascade="all, delete-orphan", lazy=True)
+    is_finalized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-class BusFixedCost(db.Model, TimestampMixin):
-    __tablename__ = "bus_fixed_costs"
-    id = db.Column(db.Integer, primary_key=True)
-    bus_id = db.Column(db.Integer, db.ForeignKey("buses.id"), nullable=False)
-    category = db.Column(db.String(16), nullable=False)
-    periodicity = db.Column(db.String(16), nullable=False, default="MONTHLY")  # MONTHLY | YEARLY
-    title = db.Column(db.String(120), nullable=False)
-    amount = db.Column(db.Numeric(12,2), nullable=False)
-    start_date = db.Column(db.Date, nullable=True)
-    end_date = db.Column(db.Date, nullable=True)
-    notes = db.Column(db.String(255), nullable=True)
-
-class BusRepair(db.Model, TimestampMixin):
-    __tablename__ = "bus_repairs"
-    id = db.Column(db.Integer, primary_key=True)
-    bus_id = db.Column(db.Integer, db.ForeignKey("buses.id"), nullable=False)
-    date = db.Column(db.Date, nullable=False, default=date.today)
-    amount = db.Column(db.Numeric(12,2), nullable=False)
-    description = db.Column(db.String(255), nullable=False)
-    vendor = db.Column(db.String(120), nullable=True)
-
-class BusMileage(db.Model, TimestampMixin):
-    __tablename__ = "bus_mileages"
-    id = db.Column(db.Integer, primary_key=True)
-    bus_id = db.Column(db.Integer, db.ForeignKey("buses.id"), nullable=False)
-    date = db.Column(db.Date, nullable=False, default=date.today)
-    km = db.Column(db.Integer, nullable=False)
-    notes = db.Column(db.String(255), nullable=True)
-
-class BusFuel(db.Model, TimestampMixin):
-    __tablename__ = "bus_fuels"
-    id = db.Column(db.Integer, primary_key=True)
-    bus_id = db.Column(db.Integer, db.ForeignKey("buses.id"), nullable=False)
-    date = db.Column(db.Date, nullable=False, default=date.today)
-    liters = db.Column(db.Numeric(10,3), nullable=False)
-    price_per_liter = db.Column(db.Numeric(10,3), nullable=False)
-    amount = db.Column(db.Numeric(12,2), nullable=False)
-    odometer = db.Column(db.Integer, nullable=True)
-    station = db.Column(db.String(120), nullable=True)
-    payment_method = db.Column(db.String(40), nullable=True)
-    notes = db.Column(db.String(255), nullable=True)
-
-
-# ---------------------- Drivers / Orders ----------------------
-class Driver(db.Model, TimestampMixin):
-    __tablename__ = "drivers"
-    id = db.Column(db.Integer, primary_key=True)
-    first_name = db.Column(db.String(80), nullable=False)
-    last_name = db.Column(db.String(80), nullable=False)
-    phone = db.Column(db.String(40), nullable=True)
-    email = db.Column(db.String(120), nullable=True)
-    license_valid_to = db.Column(db.Date, nullable=True)
-    card_valid_to = db.Column(db.Date, nullable=True)        # квалификационна карта
-    medical_valid_to = db.Column(db.Date, nullable=True)     # мед. преглед
-    notes = db.Column(db.String(500), nullable=True)
-
-    orders = db.relationship("Order", backref="driver", cascade="all, delete-orphan", lazy=True)
-
-class Order(db.Model, TimestampMixin):
-    __tablename__ = "orders"
-    id = db.Column(db.Integer, primary_key=True)
-    client = db.Column(db.String(120), nullable=False)
-    route = db.Column(db.String(200), nullable=False)
-    start_date = db.Column(db.Date, nullable=False)
-    end_date = db.Column(db.Date, nullable=False)
-    bus_id = db.Column(db.Integer, db.ForeignKey("buses.id"), nullable=True)
-    driver_id = db.Column(db.Integer, db.ForeignKey("drivers.id"), nullable=False)
-
-    day_logs = db.relationship("OrderDayLog", backref="order", cascade="all, delete-orphan", lazy=True)
-    access_tokens = db.relationship("DriverAccessToken", backref="order", cascade="all, delete-orphan", lazy=True)
-
-class OrderDayLog(db.Model, TimestampMixin):
-    __tablename__ = "order_day_logs"
-    id = db.Column(db.Integer, primary_key=True)
-    order_id = db.Column(db.Integer, db.ForeignKey("orders.id"), nullable=False)
-    date = db.Column(db.Date, nullable=False)
-    start_km = db.Column(db.Integer, nullable=True)
-    end_km = db.Column(db.Integer, nullable=True)
-    fuel_liters = db.Column(db.Numeric(10,3), nullable=True)
-    fuel_amount = db.Column(db.Numeric(12,2), nullable=True)
-    fees_amount = db.Column(db.Numeric(12,2), nullable=True)   # пътни/такси
-    work_hours = db.Column(db.Numeric(6,2), nullable=True)     # работни часове
-    incidents = db.Column(db.String(500), nullable=True)
-    notes = db.Column(db.String(500), nullable=True)
-
-    __table_args__ = (
-        db.UniqueConstraint('order_id', 'date', name='uix_order_day'),
+    passengers: Mapped[list["TripPassenger"]] = relationship(
+        "TripPassenger",
+        back_populates="trip",
+        cascade="all, delete-orphan",
     )
 
-class DriverAccessToken(db.Model, TimestampMixin):
-    __tablename__ = "driver_access_tokens"
-    id = db.Column(db.Integer, primary_key=True)
-    order_id = db.Column(db.Integer, db.ForeignKey("orders.id"), nullable=False)
-    token = db.Column(db.String(64), unique=True, nullable=False)
-    expires_at = db.Column(db.DateTime, nullable=True)
+    bookings: Mapped[list["Booking"]] = relationship(
+        "Booking",
+        back_populates="trip",
+    )
+
+
+class TripPassenger(Base):
+    __tablename__ = "trip_passengers"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    trip_id: Mapped[int] = mapped_column(
+        ForeignKey("trips.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+
+    booking_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bookings.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+
+    trip: Mapped["Trip"] = relationship("Trip", back_populates="passengers")
+    booking: Mapped["Booking | None"] = relationship("Booking", back_populates="trip_passengers")
+
+    passenger_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    from_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    to_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    seat_no: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    seat_locked_by_admin = Column(Boolean, nullable=False, default=False)
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    source_uid: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    currency: Mapped[str] = mapped_column(String(3), default="EUR", nullable=False)
+    oebb: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    voucher_or_amount_raw: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    voucher_code: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    amount_due: Mapped[float | None] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+
+    checked_in: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    paid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    amount: Mapped[float | None] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+    updated_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    manual_passenger_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    manual_from_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    manual_to_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    manual_full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    manual_seat_no: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    manual_phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    manual_voucher_raw: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    manual_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    manual_updated_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class BadClient(Base):
+    __tablename__ = "bad_clients"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    phone_norm: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
+    name_norm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bad_count: Mapped[int] = mapped_column(default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class IncomingEmail(Base):
+    __tablename__ = "incoming_emails"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    message_id: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+
+    sender: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    fetch_status: Mapped[str] = mapped_column(String(50), default="new", nullable=False)
+    parse_status: Mapped[str] = mapped_column(String(50), default="new", nullable=False)
+    parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    bookings: Mapped[list["Booking"]] = relationship(
+        "Booking",
+        back_populates="incoming_email",
+    )
+
+
+class Booking(Base):
+    __tablename__ = "bookings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    external_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+
+    incoming_email_id: Mapped[int | None] = mapped_column(
+        ForeignKey("incoming_emails.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    trip_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trips.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    booking_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    time_range_raw: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    time_from: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    time_to: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    bus_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    route_raw: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    route_from: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    route_to: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    bus_route_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bus_from: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    bus_to: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    first_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    seats_raw: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    total: Mapped[float | None] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), default="EUR", nullable=False)
+
+    payment_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    payment_status: Mapped[str] = mapped_column(String(50), default="unpaid", nullable=False)
+    booking_status: Mapped[str] = mapped_column(String(50), default="new", nullable=False)
+
+    source: Mapped[str] = mapped_column(String(50), default="email", nullable=False)
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    portal_access_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    checkin_token: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    incoming_email: Mapped["IncomingEmail | None"] = relationship(
+        "IncomingEmail",
+        back_populates="bookings",
+    )
+    trip: Mapped["Trip | None"] = relationship(
+        "Trip",
+        back_populates="bookings",
+    )
+
+    seats: Mapped[list["BookingSeat"]] = relationship(
+        "BookingSeat",
+        back_populates="booking",
+        cascade="all, delete-orphan",
+    )
+    ticket_lines: Mapped[list["BookingTicketLine"]] = relationship(
+        "BookingTicketLine",
+        back_populates="booking",
+        cascade="all, delete-orphan",
+    )
+    trip_passengers: Mapped[list["TripPassenger"]] = relationship(
+        "TripPassenger",
+        back_populates="booking",
+    )
+
+
+class BookingSeat(Base):
+    __tablename__ = "booking_seats"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("bookings.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+
+    trip_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trips.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+
+    seat_no: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    is_final: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    selection_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    booking: Mapped["Booking"] = relationship("Booking", back_populates="seats")
+    trip: Mapped["Trip | None"] = relationship("Trip")
+
+class BookingTicketLine(Base):
+    __tablename__ = "booking_ticket_lines"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("bookings.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+
+    ticket_type_raw: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ticket_type_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    qty: Mapped[int] = mapped_column(nullable=False, default=1)
+
+    # backward-compatible primary fields
+    unit_price: Mapped[float | None] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    line_total: Mapped[float | None] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), default="EUR", nullable=False)
+
+    # new dual-currency support
+    is_dual_currency: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    unit_price_uah: Mapped[float | None] = mapped_column(Numeric(12, 2, asdecimal=False), nullable=True)
+    unit_price_eur: Mapped[float | None] = mapped_column(Numeric(12, 2, asdecimal=False), nullable=True)
+
+    line_total_uah: Mapped[float | None] = mapped_column(Numeric(12, 2, asdecimal=False), nullable=True)
+    line_total_eur: Mapped[float | None] = mapped_column(Numeric(12, 2, asdecimal=False), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    booking: Mapped["Booking"] = relationship("Booking", back_populates="ticket_lines")
+
+class PaymentProof(Base):
+    __tablename__ = "payment_proofs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("bookings.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+
+    original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stored_filename: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(nullable=True)
+
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    review_status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    booking: Mapped["Booking"] = relationship("Booking")
+
+
+class BookingCancellation(Base):
+    __tablename__ = "booking_cancellations"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    booking_id = Column(Integer, ForeignKey("bookings.id", ondelete="CASCADE"), nullable=False, index=True)
+    external_id = Column(BigInteger, nullable=True, index=True)
+
+    requested_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    travel_at = Column(DateTime, nullable=True)
+
+    hours_before_departure = Column(Numeric(10, 2), nullable=True)
+    refund_percent = Column(Integer, nullable=False, default=0)
+    refund_amount = Column(Numeric(12, 2), nullable=True)
+    currency = Column(String(16), nullable=True)
+
+    reason = Column(Text, nullable=True)
+
+    admin_status = Column(String(32), nullable=False, default="pending")  # pending / approved / rejected / processed
+    admin_note = Column(Text, nullable=True)
+
+    passenger_email_sent = Column(Boolean, nullable=False, default=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    booking = relationship("Booking")

@@ -1,0 +1,735 @@
+{% extends "admin/bookings_layout.html" %}
+{% block bookings_content %}
+
+<div class="flex items-center justify-between gap-3 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold tracking-tight">Booking #{{ booking.id }}</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      Unique ID: {{ booking.external_id }}
+      {% if booking.booking_date %}
+        • {{ booking.booking_date.strftime("%d.%m.%Y") if booking.booking_date.strftime else booking.booking_date }}
+      {% endif %}
+    </p>
+  </div>
+
+  <div class="flex items-center gap-2">
+    <a href="/admin/bookings/list"
+       class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+      ← Back to bookings
+    </a>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+  <div class="xl:col-span-2 space-y-6">
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4 flex items-center justify-between gap-3">
+        <h2 class="text-lg font-semibold">Booking data</h2>
+
+        <button type="button"
+                id="toggleBookingEditBtn"
+                class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+          Измени
+        </button>
+      </div>
+
+      <div class="p-5">
+        {% if edit_ok %}
+          <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            Данните по резервацията са записани успешно.
+          </div>
+        {% endif %}
+
+        {% if edit_err %}
+          <div class="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            {% if edit_err == "invalid_name" %}
+              Невалидно име на клиент.
+            {% elif edit_err == "invalid_date" %}
+              Невалидна дата на пътуване.
+            {% elif edit_err == "invalid_time" %}
+              Невалиден час на пътуване.
+            {% elif edit_err == "invalid_phone" %}
+              Невалиден телефон.
+            {% elif edit_err == "invalid_total" %}
+              Невалидна сума.
+            {% else %}
+              Записът е неуспешен.
+            {% endif %}
+          </div>
+        {% endif %}
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+          <div>
+            <div class="text-slate-500">Customer</div>
+            <div class="font-medium">{{ booking.first_name or "" }} {{ booking.last_name or "" }}</div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Booking date</div>
+            <div class="font-medium">
+              {% if booking.booking_date %}
+                {{ booking.booking_date.strftime("%d.%m.%Y") if booking.booking_date.strftime else booking.booking_date }}
+              {% else %}
+                —
+              {% endif %}
+            </div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Departure Date</div>
+            <div class="font-medium">
+              {% if booking.booking_date %}
+                {{ booking.booking_date.strftime("%d.%m.%Y") if booking.booking_date.strftime else booking.booking_date }}
+              {% else %}
+                —
+              {% endif %}
+            </div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Departure Time</div>
+            <div class="font-medium">
+              {% if dispatch_departure_dt %}
+                {{ dispatch_departure_dt.strftime("%H:%M") }}
+              {% elif booking.time_range_raw %}
+                {{ booking.time_range_raw }}
+              {% else %}
+                —
+              {% endif %}
+            </div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Email</div>
+            <div class="font-medium">{{ booking.email or "—" }}</div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Phone</div>
+            <div class="font-medium">{{ booking.phone or "—" }}</div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Route</div>
+            <div class="font-medium">{{ booking.route_from or "—" }} → {{ booking.route_to or "—" }}</div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Bus</div>
+            <div class="font-medium">{{ booking.bus_name or "—" }}</div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Time range</div>
+            <div class="font-medium">{{ booking.time_range_raw or "—" }}</div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Payment method</div>
+            <div class="font-medium">{{ booking.payment_method or "—" }}</div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Booking status</div>
+            <div class="font-medium">{{ booking.booking_status or "—" }}</div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Payment status</div>
+            <div class="font-medium">{{ booking.payment_status or "—" }}</div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Total</div>
+            <div class="font-medium">
+              {% if booking.total is not none %}
+                {{ "%.2f"|format(booking.total) }} {{ booking.currency }}
+              {% else %}
+                —
+              {% endif %}
+            </div>
+          </div>
+
+          <div>
+            <div class="text-slate-500">Trip ID</div>
+            <div class="font-medium">
+              {% if booking.trip_id %}
+                #{{ booking.trip_id }}
+              {% else %}
+                —
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <div class="border-t border-slate-200 mt-5 pt-5">
+          <div class="mb-3 text-sm font-medium text-slate-700">Разрешени за редакция полета</div>
+          <div class="text-xs text-slate-500 mb-4">
+            Могат да се променят само: Customer, Departure Date, Departure Time, Phone, Total.
+          </div>
+
+          <form id="bookingEditBox"
+                method="post"
+                action="/admin/bookings/{{ booking.id }}/edit-basic"
+                class="hidden space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Customer</label>
+                <input type="text"
+                       name="customer_name"
+                       value="{{ editable_customer_name or ((booking.first_name or '') ~ ' ' ~ (booking.last_name or ''))|trim }}"
+                       class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Departure Date</label>
+                <input type="date"
+                       name="departure_date"
+                       value="{{ editable_departure_date or '' }}"
+                       class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Departure Time</label>
+                <input type="time"
+                       name="departure_time"
+                       value="{{ editable_departure_time or '' }}"
+                       class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Phone</label>
+                <input type="text"
+                       name="phone"
+                       value="{{ booking.phone or '' }}"
+                       class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Total</label>
+                <input type="text"
+                       name="total"
+                       value="{{ editable_total or '' }}"
+                       class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Currency</label>
+                <input type="text"
+                       value="{{ booking.currency or '—' }}"
+                       disabled
+                       class="w-full rounded-xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500 cursor-not-allowed" />
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3 pt-2">
+              <button type="submit"
+                      class="inline-flex items-center rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">
+                Запиши
+              </button>
+
+              <button type="button"
+                      id="cancelBookingEditBtn"
+                      class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                Отказ
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="border-t border-slate-200 px-5 py-4">
+        <div class="text-sm text-slate-500 mb-1">Notes</div>
+        <div class="text-sm whitespace-pre-wrap">{{ booking.notes or "—" }}</div>
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Seats</h2>
+      </div>
+
+      <div class="p-5 space-y-5">
+        <div>
+          {% if seats %}
+            <div class="flex flex-wrap gap-2">
+              {% for s in seats %}
+                <span class="inline-flex rounded-xl bg-slate-100 px-3 py-2 text-sm font-medium text-slate-800">
+                  Seat {{ s.seat_no }}
+                </span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="text-sm text-slate-500">{{ booking.seats_raw or "No seats." }}</div>
+          {% endif %}
+        </div>
+
+        {% if payment_method_norm == "cash" %}
+          <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm">
+            <div class="font-semibold text-amber-900 mb-2">Dispatcher seat assignment</div>
+
+            <div class="text-amber-900">
+              Cash booking: passenger cannot choose a seat in the portal. Dispatcher must assign a seat between
+              <b>24</b> and <b>10</b> hours before departure.
+            </div>
+
+            {% if dispatch_departure_dt %}
+              <div class="mt-2 text-amber-800">
+                Departure time: <b>{{ dispatch_departure_dt.strftime("%d.%m.%Y %H:%M") }}</b>
+              </div>
+            {% endif %}
+
+            {% if dispatch_hours_left is not none %}
+              <div class="mt-2 text-amber-800">
+                Hours until departure: <b>{{ "%.1f"|format(dispatch_hours_left) }}</b>
+              </div>
+            {% else %}
+              <div class="mt-2 text-amber-800">
+                Departure time cannot be resolved from booking date and time range.
+              </div>
+            {% endif %}
+          </div>
+
+          {% if seat_admin_ok %}
+            <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+              Seat assigned successfully.
+            </div>
+          {% endif %}
+
+          {% if seat_admin_err %}
+            <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+              {% if seat_admin_err == "window" %}
+                Seat can be assigned only in the dispatcher window: 24 to 10 hours before departure.
+              {% elif seat_admin_err == "missing" %}
+                Please choose a seat.
+              {% elif seat_admin_err == "invalid" %}
+                Invalid seat number.
+              {% elif seat_admin_err == "taken" %}
+                This seat is already taken.
+              {% elif seat_admin_err == "full" %}
+                No free seats are available.
+              {% else %}
+                Seat assignment failed.
+              {% endif %}
+            </div>
+          {% endif %}
+
+          {% if dispatch_can_assign_seat %}
+            <div class="flex flex-wrap gap-3">
+              <form method="post" action="/admin/bookings/{{ booking.id }}/assign-seat-auto">
+                <button type="submit"
+                        class="inline-flex items-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
+                  Auto assign free seat
+                </button>
+              </form>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div class="seat-map">
+                {% for row in seat_layout %}
+                  <div class="seat-row">
+                    {% for seat in row %}
+                      {% if seat is none %}
+                        <div class="seat-cell empty"></div>
+                      {% else %}
+                        {% set seat_str = seat|string %}
+                        {% set is_taken = seat_str in dispatch_taken_seats %}
+                        {% set is_selected = selected_seat == seat_str %}
+
+                        {% if is_taken and not is_selected %}
+                          <div class="seat-cell taken">
+                            {{ seat_str }}
+                          </div>
+                        {% else %}
+                          <form method="post" action="/admin/bookings/{{ booking.id }}/assign-seat" class="seat-form">
+                            <input type="hidden" name="seat_no" value="{{ seat_str }}">
+                            <button
+                              type="submit"
+                              class="seat-cell seat-btn{% if is_selected %} selected{% endif %}">
+                              {{ seat_str }}
+                            </button>
+                          </form>
+                        {% endif %}
+                      {% endif %}
+                    {% endfor %}
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-4 text-xs">
+              <div class="flex items-center gap-2">
+                <span class="inline-block h-4 w-4 rounded border border-slate-300 bg-white"></span>
+                <span class="text-slate-600">free</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="inline-block h-4 w-4 rounded border border-slate-300 bg-slate-700"></span>
+                <span class="text-slate-600">taken</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="inline-block h-4 w-4 rounded border border-emerald-300 bg-emerald-50"></span>
+                <span class="text-slate-600">assigned to this booking</span>
+              </div>
+            </div>
+          {% else %}
+            <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Seat map is locked right now for dispatcher assignment.
+            </div>
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Ticket lines</h2>
+      </div>
+
+      <div class="p-5 space-y-4">
+        {% for line in ticket_lines %}
+          <div class="rounded-2xl border border-slate-200 p-4">
+            <div class="flex items-start justify-between gap-4 mb-3">
+              <div>
+                <div class="font-semibold text-slate-900">{{ line.ticket_type_raw or "ticket" }}</div>
+                <div class="text-xs text-slate-500">code: {{ line.ticket_type_code or "—" }}</div>
+              </div>
+              <div>
+                {% if line.is_dual_currency %}
+                  <span class="inline-flex rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
+                    dual currency
+                  </span>
+                {% else %}
+                  <span class="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                    single currency
+                  </span>
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div>
+                <div class="text-slate-500">Qty</div>
+                <div class="font-medium">{{ line.qty }}</div>
+              </div>
+
+              {% if line.is_dual_currency %}
+                <div>
+                  <div class="text-slate-500">Primary</div>
+                  <div class="font-medium">
+                    {% if line.line_total is not none %}
+                      {{ "%.2f"|format(line.line_total) }} {{ line.currency }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Unit price UAH</div>
+                  <div class="font-medium">
+                    {% if line.unit_price_uah is not none %}
+                      {{ "{:,.2f}".format(line.unit_price_uah) }} UAH
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Unit price EUR</div>
+                  <div class="font-medium">
+                    {% if line.unit_price_eur is not none %}
+                      {{ "%.2f"|format(line.unit_price_eur) }} EUR
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Line total UAH</div>
+                  <div class="font-medium">
+                    {% if line.line_total_uah is not none %}
+                      {{ "{:,.2f}".format(line.line_total_uah) }} UAH
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Line total EUR</div>
+                  <div class="font-medium">
+                    {% if line.line_total_eur is not none %}
+                      {{ "%.2f"|format(line.line_total_eur) }} EUR
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+              {% else %}
+                <div>
+                  <div class="text-slate-500">Unit price</div>
+                  <div class="font-medium">
+                    {% if line.unit_price is not none %}
+                      {{ "%.2f"|format(line.unit_price) }} {{ line.currency }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Line total</div>
+                  <div class="font-medium">
+                    {% if line.line_total is not none %}
+                      {{ "%.2f"|format(line.line_total) }} {{ line.currency }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+              {% endif %}
+            </div>
+          </div>
+        {% else %}
+          <div class="text-sm text-slate-500">No ticket lines.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Payment proofs</h2>
+      </div>
+      <div class="p-5 text-sm">
+        {% if payment_proofs %}
+          <div class="space-y-4">
+            {% for proof in payment_proofs %}
+              <div class="rounded-xl border border-slate-200 px-4 py-4">
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <div class="font-medium text-slate-900">
+                      {{ proof.original_filename or proof.stored_filename }}
+                    </div>
+                    <div class="text-xs text-slate-500 mt-1">
+                      {% if proof.uploaded_at %}
+                        uploaded: {{ proof.uploaded_at.strftime("%d.%m.%Y %H:%M") }}
+                      {% endif %}
+                      {% if proof.content_type %}
+                        • {{ proof.content_type }}
+                      {% endif %}
+                      {% if proof.file_size %}
+                        • {{ proof.file_size }} bytes
+                      {% endif %}
+                    </div>
+                  </div>
+
+                  <div>
+                    {% if proof.review_status == "approved" %}
+                      <span class="inline-flex rounded-lg bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                        approved
+                      </span>
+                    {% elif proof.review_status == "rejected" %}
+                      <span class="inline-flex rounded-lg bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700">
+                        rejected
+                      </span>
+                    {% else %}
+                      <span class="inline-flex rounded-lg bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">
+                        pending
+                      </span>
+                    {% endif %}
+                  </div>
+                </div>
+
+                {% if proof.note %}
+                  <div class="mt-3">
+                    <div class="text-xs text-slate-500 mb-1">Passenger note</div>
+                    <div class="whitespace-pre-wrap text-slate-700">{{ proof.note }}</div>
+                  </div>
+                {% endif %}
+
+                {% if proof.review_note %}
+                  <div class="mt-3">
+                    <div class="text-xs text-slate-500 mb-1">Admin review note</div>
+                    <div class="whitespace-pre-wrap text-slate-700">{{ proof.review_note }}</div>
+                  </div>
+                {% endif %}
+
+                {% if proof.reviewed_at or proof.reviewed_by %}
+                  <div class="mt-3 text-xs text-slate-500">
+                    {% if proof.reviewed_at %}
+                      reviewed: {{ proof.reviewed_at.strftime("%d.%m.%Y %H:%M") }}
+                    {% endif %}
+                    {% if proof.reviewed_by %}
+                      {% if proof.reviewed_at %} • {% endif %}
+                      by: {{ proof.reviewed_by }}
+                    {% endif %}
+                  </div>
+                {% endif %}
+
+                <div class="mt-3">
+                  <a href="{{ proof.file_path }}" target="_blank"
+                     class="text-sm font-medium text-slate-700 underline">
+                    Open file
+                  </a>
+                </div>
+
+                {% if proof.review_status == "pending" %}
+                  <div class="mt-4 flex flex-col gap-3">
+                    <form method="post" action="/admin/payment-proofs/{{ proof.id }}/approve" class="inline">
+                      <button type="submit"
+                              class="inline-flex items-center rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+                        Approve
+                      </button>
+                    </form>
+
+                    <form method="post" action="/admin/payment-proofs/{{ proof.id }}/reject" class="space-y-2">
+                      <textarea
+                        name="review_note"
+                        rows="2"
+                        placeholder="Reject reason / admin note"
+                        class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                      ></textarea>
+                      <button type="submit"
+                              class="inline-flex items-center rounded-xl bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700">
+                        Reject
+                      </button>
+                    </form>
+                  </div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="text-slate-500">No payment proofs uploaded.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <details class="group">
+        <summary class="flex cursor-pointer list-none items-center justify-between border-b border-slate-200 px-5 py-4">
+          <h2 class="text-lg font-semibold">Raw text</h2>
+          <span class="text-sm text-slate-500 group-open:hidden">Покажи</span>
+          <span class="text-sm text-slate-500 hidden group-open:inline">Скрий</span>
+        </summary>
+
+        <div class="p-5">
+          <pre class="whitespace-pre-wrap text-xs leading-6 text-slate-700">{{ booking.raw_text or "—" }}</pre>
+        </div>
+      </details>
+    </div>
+
+  </div>
+</div>
+
+<style>
+  .seat-map{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+
+  .seat-row{
+    display:grid;
+    grid-template-columns:repeat(14, minmax(0, 1fr));
+    gap:8px;
+  }
+
+  .seat-form{
+    margin:0;
+  }
+
+  .seat-cell{
+    height:42px;
+    border-radius:14px;
+    border:1px solid #cbd5e1;
+    font-size:14px;
+    font-weight:600;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:#fff;
+    color:#334155;
+    width:100%;
+  }
+
+  .seat-btn{
+    cursor:pointer;
+  }
+
+  .seat-btn:hover{
+    background:#f8fafc;
+  }
+
+  .seat-cell.taken{
+    background:#e2e8f0;
+    color:#94a3b8;
+    border-color:#cbd5e1;
+  }
+
+  .seat-cell.selected{
+    border-color:#86efac;
+    background:#ecfdf5;
+    color:#047857;
+  }
+
+  .seat-cell.empty{
+    background:transparent;
+    border-color:transparent;
+  }
+
+  @media (max-width: 768px){
+    .seat-row{
+      gap:6px;
+    }
+
+    .seat-cell{
+      height:38px;
+      font-size:12px;
+      border-radius:12px;
+    }
+  }
+</style>
+
+<script>
+(function () {
+  const toggleBtn = document.getElementById("toggleBookingEditBtn");
+  const cancelBtn = document.getElementById("cancelBookingEditBtn");
+  const box = document.getElementById("bookingEditBox");
+
+  if (!toggleBtn || !box) return;
+
+  function openBox() {
+    box.classList.remove("hidden");
+    toggleBtn.textContent = "Скрий";
+  }
+
+  function closeBox() {
+    box.classList.add("hidden");
+    toggleBtn.textContent = "Измени";
+  }
+
+  toggleBtn.addEventListener("click", function () {
+    if (box.classList.contains("hidden")) {
+      openBox();
+    } else {
+      closeBox();
+    }
+  });
+
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", function () {
+      closeBox();
+    });
+  }
+
+  {% if edit_err %}
+    openBox();
+  {% endif %}
+})();
+</script>
+
+{% endblock %}

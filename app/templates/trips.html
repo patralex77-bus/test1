@@ -1,0 +1,818 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="flex items-start justify-between gap-3">
+  <div>
+    <h1 class="text-xl font-semibold tracking-tight">Курсове</h1>
+    <p class="text-sm text-slate-500">
+      Избери ден от календара. Резюмето показва пътниците за рейсовете в избрания ден.
+    </p>
+  </div>
+
+  <a href="/admin/resumee"
+     class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold active:scale-[0.99]">
+    Admin
+  </a>
+</div>
+
+<!-- Sync panel -->
+<div class="mt-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+  <div class="flex flex-wrap items-center gap-3">
+    <button id="runSyncBtn" type="button"
+      class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold active:scale-[0.99]">
+      Sync (Drive)
+    </button>
+    <button id="runSyncForceBtn" type="button"
+      class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold active:scale-[0.99]">
+      Force Sync
+    </button>
+    <span id="syncStatus" class="text-xs text-slate-500">—</span>
+  </div>
+  <div class="mt-2 text-xs text-slate-500">
+    Sync = пуска синк само ако има промяна (hash). Force Sync = синк винаги.
+  </div>
+</div>
+
+<!-- Търсене и ръчна редакция -->
+<div class="mt-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+  <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
+    <div class="text-sm font-semibold text-slate-800">Търсене в пътници</div>
+
+    <input
+      id="passengerSearchQ"
+      type="text"
+      placeholder="Търси по UID / име / телефон / място / инфо / от / до..."
+      class="min-w-[260px] flex-1 rounded-xl border border-slate-200 px-4 py-2 text-sm outline-none focus:border-slate-400"
+    />
+
+    <button
+      id="passengerSearchBtn"
+      type="button"
+      class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold active:scale-[0.99]">
+      Търси
+    </button>
+
+    <button
+      id="passengerSearchCloseBtn"
+      type="button"
+      class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold active:scale-[0.99]">
+      Затвори
+    </button>
+
+    <span id="passengerSearchStatus" class="text-xs text-slate-500">—</span>
+  </div>
+
+  <div class="mt-2 text-xs text-slate-500">
+    Търси по ефективните стойности. Редакцията се записва в manual_* полетата и cronjob няма да я презапише.
+  </div>
+
+  <div id="passengerSearchWrap" class="mt-4 hidden">
+    <div class="overflow-auto">
+      <table class="min-w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200 text-xs text-slate-500">
+            <th class="px-2 py-2 text-left font-semibold">Курс</th>
+            <th class="px-2 py-2 text-left font-semibold">Маршрут</th>
+            <th class="px-2 py-2 text-left font-semibold">От</th>
+            <th class="px-2 py-2 text-left font-semibold">До</th>
+            <th class="px-2 py-2 text-left font-semibold">Име</th>
+            <th class="px-2 py-2 text-left font-semibold">Телефон</th>
+            <th class="px-2 py-2 text-left font-semibold">Място</th>
+            <th class="px-2 py-2 text-left font-semibold">Инфо</th>
+            <th class="px-2 py-2 text-left font-semibold">Действия</th>
+          </tr>
+        </thead>
+        <tbody id="passengerSearchRows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ====== КАЛЕНДАР + РЕЗЮМЕ ЗА ДЕНЯ ====== -->
+<div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+  <!-- Календар -->
+  <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+    <div class="flex items-center justify-between">
+      <button id="calPrev"
+        class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold active:scale-[0.99]">
+        ←
+      </button>
+
+      <div class="text-sm font-semibold text-slate-800" id="calTitle">—</div>
+
+      <button id="calNext"
+        class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold active:scale-[0.99]">
+        →
+      </button>
+    </div>
+
+    <div class="mt-3 grid grid-cols-7 gap-2 text-xs font-semibold text-slate-500">
+      <div class="text-center">Пн</div>
+      <div class="text-center">Вт</div>
+      <div class="text-center">Ср</div>
+      <div class="text-center">Чт</div>
+      <div class="text-center">Пт</div>
+      <div class="text-center">Сб</div>
+      <div class="text-center">Нд</div>
+    </div>
+
+    <div class="mt-2 grid grid-cols-7 gap-2" id="calGrid"></div>
+
+    <div class="mt-3 flex flex-wrap gap-2 text-xs">
+      <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+        <span class="h-3 w-3 rounded-sm" style="background:#fee2e2"></span> Innsbruck → Kyiv
+      </span>
+      <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+        <span class="h-3 w-3 rounded-sm" style="background:#dbeafe"></span> Kyiv → Innsbruck
+      </span>
+      <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+        <span class="h-3 w-3 rounded-sm" style="background:linear-gradient(135deg,#fee2e2 0 50%,#dbeafe 50% 100%)"></span> И двата
+      </span>
+    </div>
+  </div>
+
+  <!-- Резюме за избрания ден -->
+  <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+    <div class="flex items-center justify-between">
+      <div class="text-sm font-semibold text-slate-800">Резюме (пътници)</div>
+      <div class="text-xs text-slate-500" id="monthHint">—</div>
+    </div>
+
+    <div class="mt-3 space-y-3" id="summaryWrap"></div>
+
+    <div class="mt-3 text-xs text-slate-500">
+      Избери ден от календара, за да видиш резюме за рейсовете в този ден.
+    </div>
+  </div>
+</div>
+
+<style>
+  .cal-day{
+    height: 46px;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    background: #fff;
+    padding: 6px 8px;
+    font-size: 13px;
+    color:#0f172a;
+    user-select:none;
+    position: relative;
+  }
+
+  .cal-day.muted{
+    color:#94a3b8;
+    background:#fafafa;
+  }
+
+  .cal-day.selected{
+    outline: 2px solid #0f172a;
+    outline-offset: 1px;
+  }
+
+  .cal-day .daynum{
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    font-weight: 400;
+    line-height: 1;
+  }
+
+  .cal-day .pax-top-left{
+    position: absolute;
+    top: 6px;
+    left: 8px;
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(0,0,0,0.10);
+    background: rgba(255,255,255,0.65);
+  }
+
+  .cal-day .pax-bottom-right{
+    position: absolute;
+    bottom: 6px;
+    right: 8px;
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(0,0,0,0.10);
+    background: rgba(255,255,255,0.65);
+  }
+</style>
+
+<script>
+  let __PASSENGER_SEARCH_LAST_Q__ = "";
+
+  function tripSearchEscHtml(s){
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function tripSearchEscAttr(s){
+    return tripSearchEscHtml(s);
+  }
+
+  function tripSearchFmtDate(iso){
+    if (!iso) return "";
+    try{
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      return d.toLocaleString("bg-BG");
+    }catch{
+      return iso;
+    }
+  }
+
+  function setPassengerSearchStatus(text, color){
+    const statusEl = document.getElementById("passengerSearchStatus");
+    if (!statusEl) return;
+    statusEl.textContent = text ?? "—";
+    statusEl.style.color = color || "";
+  }
+
+  function tripSearchClose(message){
+    const wrap = document.getElementById("passengerSearchWrap");
+    const rows = document.getElementById("passengerSearchRows");
+    const qEl = document.getElementById("passengerSearchQ");
+
+    if (wrap) wrap.classList.add("hidden");
+    if (rows) rows.innerHTML = "";
+    if (qEl) qEl.value = "";
+
+    __PASSENGER_SEARCH_LAST_Q__ = "";
+
+    if (message){
+      setPassengerSearchStatus(message, "#15803d");
+    } else {
+      setPassengerSearchStatus("—");
+    }
+  }
+
+  async function tripSearchFetch(q){
+    const res = await fetch(`/api/passengers/search?q=${encodeURIComponent(q)}`, {
+      credentials: "same-origin"
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.detail || res.status);
+    return data.items || [];
+  }
+
+  async function tripSearchSaveManual(passengerId, payload){
+    const res = await fetch(`/api/passengers/${passengerId}/manual`, {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.detail || res.status);
+    return data.item;
+  }
+
+  async function refreshSelectedDaySummary(){
+    const selected = window.__SELECTED_DATE__ || "";
+    if (selected){
+      await renderSummaryForDay(selected);
+    }
+  }
+
+  function tripSearchTodayYmd(){
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function tripSearchIsEditable(item){
+    const tripDate = String(item?.tripDate || "").slice(0, 10); // YYYY-MM-DD
+    if (!tripDate) return false;
+    return tripDate >= tripSearchTodayYmd();
+  }
+  
+function tripSearchRender(items){
+  const wrap = document.getElementById("passengerSearchWrap");
+  const rows = document.getElementById("passengerSearchRows");
+  if (!wrap || !rows) return;
+
+  wrap.classList.remove("hidden");
+
+  if (!items.length){
+    rows.innerHTML = `
+      <tr>
+        <td colspan="9" class="px-2 py-4 text-sm text-slate-500">Няма намерени резултати.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  rows.innerHTML = items.map(item => {
+    const editable = tripSearchIsEditable(item);
+    const ro = editable ? "" : "readonly disabled";
+    const actionHtml = editable
+      ? `
+        <div class="flex flex-col gap-2">
+          <button
+            type="button"
+            data-action="save"
+            class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold active:scale-[0.99]">
+            Запиши
+          </button>
+
+          <button
+            type="button"
+            data-action="reset"
+            class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold active:scale-[0.99]">
+            Върни Excel
+          </button>
+        </div>
+      `
+      : `
+        <div class="text-xs font-semibold text-slate-400">
+          Архив<br/>без редакция
+        </div>
+      `;
+
+    return `
+      <tr class="border-t border-slate-100" data-id="${item.id}" data-editable="${editable ? "1" : "0"}">
+        <td class="px-2 py-3 align-top whitespace-nowrap">
+          <div class="font-semibold text-slate-800">#${item.tripId}</div>
+          <div class="text-xs text-slate-500">${tripSearchEscHtml(tripSearchFmtDate(item.tripDate))}</div>
+          <a href="/trips/${item.tripId}" class="mt-1 inline-block text-xs font-semibold text-slate-600 underline underline-offset-2">
+            Отвори
+          </a>
+        </td>
+
+        <td class="px-2 py-3 align-top whitespace-nowrap">
+          ${tripSearchEscHtml(item.routeFrom || "")} → ${tripSearchEscHtml(item.routeTo || "")}
+        </td>
+
+        <td class="px-2 py-3 align-top min-w-[150px]">
+          <input
+            data-field="fromCity"
+            value="${tripSearchEscAttr(item.fromCity || "")}"
+            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm ${editable ? "" : "bg-slate-50 text-slate-500"}"
+            ${ro}
+          />
+          <div class="mt-1 text-[11px] text-slate-400">
+            Excel: ${tripSearchEscHtml(item.baseFromCity || "—")}
+          </div>
+        </td>
+
+        <td class="px-2 py-3 align-top min-w-[150px]">
+          <input
+            data-field="toCity"
+            value="${tripSearchEscAttr(item.toCity || "")}"
+            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm ${editable ? "" : "bg-slate-50 text-slate-500"}"
+            ${ro}
+          />
+          <div class="mt-1 text-[11px] text-slate-400">
+            Excel: ${tripSearchEscHtml(item.baseToCity || "—")}
+          </div>
+        </td>
+
+        <td class="px-2 py-3 align-top min-w-[220px]">
+          <input
+            data-field="fullName"
+            value="${tripSearchEscAttr(item.fullName || "")}"
+            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm ${editable ? "" : "bg-slate-50 text-slate-500"}"
+            ${ro}
+          />
+          <div class="mt-1 text-[11px] text-slate-400">
+            Excel: ${tripSearchEscHtml(item.baseFullName || "—")}
+          </div>
+        </td>
+
+        <td class="px-2 py-3 align-top min-w-[180px]">
+          <input
+            data-field="phone"
+            value="${tripSearchEscAttr(item.phone || "")}"
+            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm ${editable ? "" : "bg-slate-50 text-slate-500"}"
+            ${ro}
+          />
+          <div class="mt-1 text-[11px] text-slate-400">
+            Excel: ${tripSearchEscHtml(item.basePhone || "—")}
+          </div>
+        </td>
+
+        <td class="px-2 py-3 align-top min-w-[130px]">
+          <input
+            data-field="seatNo"
+            value="${tripSearchEscAttr(item.seatNo || "")}"
+            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm ${editable ? "" : "bg-slate-50 text-slate-500"}"
+            ${ro}
+          />
+          <div class="mt-1 text-[11px] text-slate-400">
+            Excel: ${tripSearchEscHtml(item.baseSeatNo || "—")}
+          </div>
+        </td>
+
+        <td class="px-2 py-3 align-top min-w-[220px]">
+          <input
+            data-field="voucherRaw"
+            value="${tripSearchEscAttr(item.voucherRaw || "")}"
+            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm ${editable ? "" : "bg-slate-50 text-slate-500"}"
+            ${ro}
+          />
+          <div class="mt-1 text-[11px] text-slate-400">
+            Excel: ${tripSearchEscHtml(item.baseVoucherRaw || "—")}
+          </div>
+        </td>
+
+        <td class="px-2 py-3 align-top whitespace-nowrap">
+          ${actionHtml}
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  rows.querySelectorAll('[data-action="save"]').forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const tr = btn.closest("tr");
+      const passengerId = tr?.getAttribute("data-id");
+      const editable = tr?.getAttribute("data-editable") === "1";
+      if (!tr || !passengerId || !editable) return;
+
+      const fromCity = tr.querySelector('[data-field="fromCity"]')?.value ?? "";
+      const toCity = tr.querySelector('[data-field="toCity"]')?.value ?? "";
+      const fullName = tr.querySelector('[data-field="fullName"]')?.value ?? "";
+      const phone = tr.querySelector('[data-field="phone"]')?.value ?? "";
+      const seatNo = tr.querySelector('[data-field="seatNo"]')?.value ?? "";
+      const voucherRaw = tr.querySelector('[data-field="voucherRaw"]')?.value ?? "";
+
+      try{
+        setPassengerSearchStatus("Записване...");
+        btn.disabled = true;
+
+        await tripSearchSaveManual(passengerId, {
+          fromCity,
+          toCity,
+          fullName,
+          phone,
+          seatNo,
+          voucherRaw
+        });
+
+        tripSearchClose("Записът е успешен ✅");
+        await refreshSelectedDaySummary();
+      }catch(e){
+        setPassengerSearchStatus("Грешка");
+        alert("Грешка: " + e.message);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  });
+
+  rows.querySelectorAll('[data-action="reset"]').forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const tr = btn.closest("tr");
+      const passengerId = tr?.getAttribute("data-id");
+      const editable = tr?.getAttribute("data-editable") === "1";
+      if (!tr || !passengerId || !editable) return;
+
+      try{
+        setPassengerSearchStatus("Връщане към Excel...");
+        btn.disabled = true;
+
+        await tripSearchSaveManual(passengerId, {
+          fromCity: "",
+          toCity: "",
+          fullName: "",
+          phone: "",
+          seatNo: "",
+          voucherRaw: ""
+        });
+
+        tripSearchClose("Записът е върнат към Excel ✅");
+        await refreshSelectedDaySummary();
+      }catch(e){
+        setPassengerSearchStatus("Грешка");
+        alert("Грешка: " + e.message);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+  async function tripSearchRun(){
+    const qEl = document.getElementById("passengerSearchQ");
+    const q = (qEl?.value || "").trim();
+
+    __PASSENGER_SEARCH_LAST_Q__ = q;
+
+    if (!q){
+      tripSearchClose();
+      return;
+    }
+
+    try{
+      setPassengerSearchStatus("Търсене...");
+      const items = await tripSearchFetch(q);
+      tripSearchRender(items);
+      setPassengerSearchStatus(`Намерени: ${items.length}`);
+    }catch(e){
+      setPassengerSearchStatus("Грешка");
+      alert("Грешка: " + e.message);
+    }
+  }
+
+  document.getElementById("passengerSearchBtn")?.addEventListener("click", tripSearchRun);
+  document.getElementById("passengerSearchCloseBtn")?.addEventListener("click", () => tripSearchClose());
+  document.getElementById("passengerSearchQ")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      tripSearchRun();
+    }
+  });
+
+  // ====== Данните от Jinja -> JS ======
+  const TRIPS = [
+    {% for t in trips %}
+      {% if t.date_time %}
+        {
+          id: {{ t.id }},
+          date: {{ t.date_time.strftime("%Y-%m-%d") | tojson }},
+          from: {{ (t.route_from or "") | tojson }},
+          to: {{ (t.route_to or "") | tojson }},
+          total: {{ t.total_passengers or 0 }},
+          dir:
+            {% set rf_norm = (t.route_from or "")|trim|lower %}
+            {% set rt_norm = (t.route_to or "")|trim|lower %}
+            {% if rf_norm == "innsbruck" and rt_norm == "kyiv" %}
+              "red"
+            {% elif rf_norm == "kyiv" and rt_norm == "innsbruck" %}
+              "blue"
+            {% else %}
+              "other"
+            {% endif %}
+        },
+      {% endif %}
+    {% endfor %}
+  ];
+
+  const tripMap = new Map();
+  for (const t of TRIPS) {
+    if (!t.date || t.dir === "other") continue;
+    const cur = tripMap.get(t.date) || { red:false, blue:false };
+    if (t.dir === "red") cur.red = true;
+    if (t.dir === "blue") cur.blue = true;
+    tripMap.set(t.date, cur);
+  }
+
+  const paxMap = new Map();
+  for (const t of TRIPS) {
+    if (!t.date || t.dir === "other") continue;
+    const cur = paxMap.get(t.date) || { red: 0, blue: 0 };
+    const val = Number(t.total || 0);
+    if (t.dir === "red") cur.red += val;
+    if (t.dir === "blue") cur.blue += val;
+    paxMap.set(t.date, cur);
+  }
+
+  function ymd(dt){
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, "0");
+    const d = String(dt.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function startOfCalendarMonth(year, monthIndex){
+    const first = new Date(year, monthIndex, 1);
+    const dow = (first.getDay() + 6) % 7;
+    const start = new Date(year, monthIndex, 1 - dow);
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+
+  function renderCalendar(viewDate){
+    const grid = document.getElementById("calGrid");
+    const title = document.getElementById("calTitle");
+    if (!grid || !title) return;
+
+    const year = viewDate.getFullYear();
+    const month = viewDate.getMonth();
+    const monthName = viewDate.toLocaleString("bg-BG", { month: "long", year: "numeric" });
+    title.textContent = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+
+    grid.innerHTML = "";
+
+    const start = startOfCalendarMonth(year, month);
+    const selected = window.__SELECTED_DATE__ || "";
+
+    for (let i = 0; i < 42; i++){
+      const day = new Date(start);
+      day.setDate(start.getDate() + i);
+
+      const inMonth = day.getMonth() === month;
+      const key = ymd(day);
+      const info = tripMap.get(key);
+      const pax = paxMap.get(key) || { red: 0, blue: 0 };
+
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "cal-day" + (inMonth ? "" : " muted") + (selected === key ? " selected" : "");
+
+      let html = `<div class="daynum">${day.getDate()}</div>`;
+
+      if (info?.red || info?.blue){
+        if (pax.red > 0) html += `<div class="pax-top-left">${pax.red}</div>`;
+        if (pax.blue > 0) html += `<div class="pax-bottom-right">${pax.blue}</div>`;
+      }
+
+      cell.innerHTML = html;
+
+      if (info?.red && info?.blue) cell.style.background = "linear-gradient(135deg,#fee2e2 0 50%,#dbeafe 50% 100%)";
+      else if (info?.red) cell.style.background = "#fee2e2";
+      else if (info?.blue) cell.style.background = "#dbeafe";
+
+      cell.addEventListener("click", () => {
+        window.__SELECTED_DATE__ = key;
+        renderCalendar(viewDate);
+        renderSummaryForDay(key);
+      });
+
+      grid.appendChild(cell);
+    }
+  }
+
+  function escapeHtml(s){
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function dirLabel(t){
+    if (t.dir === "red") return "Innsbruck → Kyiv";
+    if (t.dir === "blue") return "Kyiv → Innsbruck";
+    return `${t.from} → ${t.to}`;
+  }
+
+  function dirBadgeStyle(t){
+    if (t.dir === "red") return "background:#fee2e2;color:#7f1d1d;border:1px solid #fecaca;";
+    if (t.dir === "blue") return "background:#dbeafe;color:#1e3a8a;border:1px solid #bfdbfe;";
+    return "background:#f1f5f9;color:#0f172a;border:1px solid #e2e8f0;";
+  }
+
+  async function fetchTripSummary(tripId){
+    const res = await fetch(`/api/trips/${tripId}/summary`, { credentials:"same-origin" });
+    if (!res.ok) throw new Error("summary failed");
+    return await res.json();
+  }
+
+  function renderOneSummary(root, trip, summary){
+    const fromRows = (summary.from || []).slice().sort((a, b) => b.count - a.count || a.city.localeCompare(b.city));
+    const toRows = (summary.to || []).slice().sort((a, b) => b.count - a.count || a.city.localeCompare(b.city));
+
+    const fromHtml = fromRows.length
+      ? fromRows.map(r => `<tr class="border-b border-slate-100"><td class="py-1">${escapeHtml(r.city)}</td><td class="py-1 text-right font-semibold">${r.count}</td></tr>`).join("")
+      : `<tr><td class="py-2 text-slate-400" colspan="2">Няма</td></tr>`;
+
+    const toHtml = toRows.length
+      ? toRows.map(r => `<tr class="border-b border-slate-100"><td class="py-1">${escapeHtml(r.city)}</td><td class="py-1 text-right font-semibold">${r.count}</td></tr>`).join("")
+      : `<tr><td class="py-2 text-slate-400" colspan="2">Няма</td></tr>`;
+
+    root.insertAdjacentHTML("beforeend", `
+      <div class="rounded-2xl border border-slate-200 p-3">
+        <div class="flex items-center justify-between gap-2">
+          <div class="text-xs font-semibold" style="padding:6px 10px;border-radius:999px;${dirBadgeStyle(trip)}">
+            ${escapeHtml(dirLabel(trip))}
+          </div>
+          <a href="/trips/${trip.id}" class="text-xs font-semibold text-slate-600 underline underline-offset-2">Отвори</a>
+        </div>
+
+        <div class="mt-2 text-xs text-slate-500">
+          Общо пътници: <span class="font-semibold text-slate-700">${summary.total ?? 0}</span>
+        </div>
+
+        <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="rounded-2xl border border-slate-200 p-3">
+            <div class="text-xs font-semibold text-slate-700 mb-2">ОТ (бр. пътници)</div>
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-xs text-slate-500">
+                  <th class="text-left font-semibold">Град</th>
+                  <th class="text-right font-semibold">Брой</th>
+                </tr>
+              </thead>
+              <tbody>${fromHtml}</tbody>
+            </table>
+          </div>
+
+          <div class="rounded-2xl border border-slate-200 p-3">
+            <div class="text-xs font-semibold text-slate-700 mb-2">ДО (бр. пътници)</div>
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-xs text-slate-500">
+                  <th class="text-left font-semibold">Град</th>
+                  <th class="text-right font-semibold">Брой</th>
+                </tr>
+              </thead>
+              <tbody>${toHtml}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+
+  async function renderSummaryForDay(dateStr){
+    const wrap = document.getElementById("summaryWrap");
+    const hint = document.getElementById("monthHint");
+    if (!wrap) return;
+
+    if (hint) hint.textContent = dateStr || "—";
+
+    if (!dateStr){
+      wrap.innerHTML = `<div class="text-xs text-slate-500">Избери дата от календара.</div>`;
+      return;
+    }
+
+    const tripsForDay = TRIPS.filter(t => t.date === dateStr && t.dir !== "other");
+
+    if (tripsForDay.length === 0){
+      wrap.innerHTML = `<div class="text-xs text-slate-500">Няма курсове за избраната дата.</div>`;
+      return;
+    }
+
+    wrap.innerHTML = "";
+
+    for (const trip of tripsForDay){
+      try{
+        const summary = await fetchTripSummary(trip.id);
+        renderOneSummary(wrap, trip, summary);
+      }catch(e){
+        wrap.insertAdjacentHTML("beforeend", `
+          <div class="rounded-2xl border border-red-200 bg-white p-3 text-sm text-red-600">
+            Грешка при зареждане на резюме за курс #${trip.id}.
+          </div>
+        `);
+      }
+    }
+  }
+
+  async function runAdminSync(force){
+    const statusEl = document.getElementById("syncStatus");
+    const url = "/admin/run-sync" + (force ? "?force=1" : "");
+
+    try{
+      if (statusEl) statusEl.textContent = force ? "Force sync..." : "Sync...";
+      const res = await fetch(url, { method:"POST", credentials:"same-origin" });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 401){
+        if (statusEl) statusEl.textContent = "Няма достъп (login).";
+        window.location.href = "/admin/login";
+        return;
+      }
+
+      if (!res.ok){
+        if (statusEl) statusEl.textContent = "Грешка.";
+        alert("Грешка: " + (data?.detail || res.status));
+        return;
+      }
+
+      if (statusEl) statusEl.textContent = "OK ✅ (refresh)";
+      location.reload();
+    }catch(e){
+      if (statusEl) statusEl.textContent = "Грешка при заявката.";
+      alert("Грешка при заявката.");
+    }
+  }
+
+  (function(){
+    document.getElementById("runSyncBtn")?.addEventListener("click", () => runAdminSync(false));
+    document.getElementById("runSyncForceBtn")?.addEventListener("click", () => runAdminSync(true));
+
+    let viewDate = new Date();
+    viewDate.setDate(1);
+
+    renderCalendar(viewDate);
+
+    document.getElementById("calPrev")?.addEventListener("click", () => {
+      viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1);
+      renderCalendar(viewDate);
+    });
+
+    document.getElementById("calNext")?.addEventListener("click", () => {
+      viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1);
+      renderCalendar(viewDate);
+    });
+
+    renderSummaryForDay(window.__SELECTED_DATE__ || "");
+  })();
+</script>
+
+{% endblock %}

@@ -1,0 +1,492 @@
+{% extends "admin/bookings_layout.html" %}
+{% block bookings_content %}
+
+<div class="flex items-center justify-between gap-3 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold tracking-tight">Booking #{{ booking.id }}</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      Unique ID: {{ booking.external_id }}
+      {% if booking.booking_date %}
+        • {{ booking.booking_date.strftime("%d.%m.%Y") if booking.booking_date.strftime else booking.booking_date }}
+      {% endif %}
+    </p>
+  </div>
+
+  <div class="flex items-center gap-2">
+    <form method="post" action="/admin/bookings/{{ booking.id }}/rematch" class="inline">
+      <button
+        type="submit"
+        class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        Re-match trip
+      </button>
+    </form>
+
+    <form method="post" action="/admin/bookings/{{ booking.id }}/resync" class="inline">
+      <button
+        type="submit"
+        class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        Re-sync passengers
+      </button>
+    </form>
+
+    <a href="/admin/bookings/list"
+       class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+      ← Back to bookings
+    </a>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+  <div class="xl:col-span-2 space-y-6">
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Booking data</h2>
+      </div>
+
+      <div class="p-5 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+        <div>
+          <div class="text-slate-500">Customer</div>
+          <div class="font-medium">{{ booking.first_name or "" }} {{ booking.last_name or "" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Booking date</div>
+          <div class="font-medium">
+            {% if booking.booking_date %}
+              {{ booking.booking_date.strftime("%d.%m.%Y") if booking.booking_date.strftime else booking.booking_date }}
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Email</div>
+          <div class="font-medium">{{ booking.email or "—" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Phone</div>
+          <div class="font-medium">{{ booking.phone or "—" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Route</div>
+          <div class="font-medium">{{ booking.route_from or "—" }} → {{ booking.route_to or "—" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Bus</div>
+          <div class="font-medium">{{ booking.bus_name or "—" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Time</div>
+          <div class="font-medium">{{ booking.time_range_raw or "—" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Payment method</div>
+          <div class="font-medium">{{ booking.payment_method or "—" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Booking status</div>
+          <div class="font-medium">{{ booking.booking_status or "—" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Payment status</div>
+          <div class="font-medium">{{ booking.payment_status or "—" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Total</div>
+          <div class="font-medium">
+            {% if booking.total is not none %}
+              {{ "%.2f"|format(booking.total) }} {{ booking.currency }}
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">Trip ID</div>
+          <div class="font-medium">
+            {% if booking.trip_id %}
+              #{{ booking.trip_id }}
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="border-t border-slate-200 px-5 py-4">
+        <div class="text-sm text-slate-500 mb-1">Notes</div>
+        <div class="text-sm whitespace-pre-wrap">{{ booking.notes or "—" }}</div>
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Seats</h2>
+      </div>
+      <div class="p-5">
+        {% if seats %}
+          <div class="flex flex-wrap gap-2">
+            {% for s in seats %}
+              <span class="inline-flex rounded-xl bg-slate-100 px-3 py-2 text-sm font-medium text-slate-800">
+                Seat {{ s.seat_no }}
+              </span>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="text-sm text-slate-500">{{ booking.seats_raw or "No seats." }}</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Ticket lines</h2>
+      </div>
+
+      <div class="p-5 space-y-4">
+        {% for line in ticket_lines %}
+          <div class="rounded-2xl border border-slate-200 p-4">
+            <div class="flex items-start justify-between gap-4 mb-3">
+              <div>
+                <div class="font-semibold text-slate-900">{{ line.ticket_type_raw or "ticket" }}</div>
+                <div class="text-xs text-slate-500">code: {{ line.ticket_type_code or "—" }}</div>
+              </div>
+              <div>
+                {% if line.is_dual_currency %}
+                  <span class="inline-flex rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
+                    dual currency
+                  </span>
+                {% else %}
+                  <span class="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                    single currency
+                  </span>
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div>
+                <div class="text-slate-500">Qty</div>
+                <div class="font-medium">{{ line.qty }}</div>
+              </div>
+
+              {% if line.is_dual_currency %}
+                <div>
+                  <div class="text-slate-500">Primary</div>
+                  <div class="font-medium">
+                    {% if line.line_total is not none %}
+                      {{ "%.2f"|format(line.line_total) }} {{ line.currency }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Unit price UAH</div>
+                  <div class="font-medium">
+                    {% if line.unit_price_uah is not none %}
+                      {{ "{:,.2f}".format(line.unit_price_uah) }} UAH
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Unit price EUR</div>
+                  <div class="font-medium">
+                    {% if line.unit_price_eur is not none %}
+                      {{ "%.2f"|format(line.unit_price_eur) }} EUR
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Line total UAH</div>
+                  <div class="font-medium">
+                    {% if line.line_total_uah is not none %}
+                      {{ "{:,.2f}".format(line.line_total_uah) }} UAH
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Line total EUR</div>
+                  <div class="font-medium">
+                    {% if line.line_total_eur is not none %}
+                      {{ "%.2f"|format(line.line_total_eur) }} EUR
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+              {% else %}
+                <div>
+                  <div class="text-slate-500">Unit price</div>
+                  <div class="font-medium">
+                    {% if line.unit_price is not none %}
+                      {{ "%.2f"|format(line.unit_price) }} {{ line.currency }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+
+                <div>
+                  <div class="text-slate-500">Line total</div>
+                  <div class="font-medium">
+                    {% if line.line_total is not none %}
+                      {{ "%.2f"|format(line.line_total) }} {{ line.currency }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
+              {% endif %}
+            </div>
+          </div>
+        {% else %}
+          <div class="text-sm text-slate-500">No ticket lines.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Linked trip passengers</h2>
+      </div>
+      <div class="p-5">
+        {% if linked_trip_passengers %}
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="border-b border-slate-200">
+                <tr class="text-left">
+                  <th class="px-3 py-2 font-semibold">ID</th>
+                  <th class="px-3 py-2 font-semibold">No</th>
+                  <th class="px-3 py-2 font-semibold">Name</th>
+                  <th class="px-3 py-2 font-semibold">Seat</th>
+                  <th class="px-3 py-2 font-semibold">Amount due</th>
+                  <th class="px-3 py-2 font-semibold">Paid</th>
+                  <th class="px-3 py-2 font-semibold">Checked-in</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-200">
+                {% for p in linked_trip_passengers %}
+                <tr>
+                  <td class="px-3 py-2">{{ p.id }}</td>
+                  <td class="px-3 py-2">{{ p.passenger_no or "—" }}</td>
+                  <td class="px-3 py-2">{{ p.full_name or "—" }}</td>
+                  <td class="px-3 py-2">{{ p.seat_no or "—" }}</td>
+                  <td class="px-3 py-2">
+                    {% if p.amount_due is not none %}
+                      {{ "%.2f"|format(p.amount_due) }} {{ p.currency }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td class="px-3 py-2">{{ "yes" if p.paid else "no" }}</td>
+                  <td class="px-3 py-2">{{ "yes" if p.checked_in else "no" }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="text-sm text-slate-500">No linked trip passengers yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="space-y-6">
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Trip link</h2>
+      </div>
+      <div class="p-5 text-sm">
+        {% if trip %}
+          <div class="mb-3">
+            <span class="inline-flex rounded-lg bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+              linked
+            </span>
+          </div>
+          <div class="mb-2"><span class="text-slate-500">Trip ID:</span> <span class="font-medium">#{{ trip.id }}</span></div>
+          <div class="mb-2"><span class="text-slate-500">Route:</span> <span class="font-medium">{{ trip.route_from or "—" }} → {{ trip.route_to or "—" }}</span></div>
+          <div class="mb-2"><span class="text-slate-500">Date:</span> <span class="font-medium">{% if trip.date_time %}{{ trip.date_time.strftime("%d.%m.%Y %H:%M") }}{% else %}—{% endif %}</span></div>
+          <div class="mt-4">
+            <a href="/trips/{{ trip.id }}"
+               class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+              Open trip
+            </a>
+          </div>
+        {% else %}
+          <div class="mb-3">
+            <span class="inline-flex rounded-lg bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">
+              unlinked
+            </span>
+          </div>
+          <div class="text-slate-500">Booking is not linked to a trip.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Incoming email</h2>
+      </div>
+      <div class="p-5 text-sm">
+        {% if incoming_email %}
+          <div class="mb-2"><span class="text-slate-500">Email ID:</span> <span class="font-medium">{{ incoming_email.id }}</span></div>
+          <div class="mb-2"><span class="text-slate-500">Message ID:</span> <span class="font-medium break-all">{{ incoming_email.message_id }}</span></div>
+          <div class="mb-2"><span class="text-slate-500">Sender:</span> <span class="font-medium">{{ incoming_email.sender or "—" }}</span></div>
+          <div class="mb-2"><span class="text-slate-500">Subject:</span> <span class="font-medium">{{ incoming_email.subject or "—" }}</span></div>
+          <div class="mb-2"><span class="text-slate-500">Received:</span> <span class="font-medium">{% if incoming_email.received_at %}{{ incoming_email.received_at.strftime("%d.%m.%Y %H:%M") }}{% else %}—{% endif %}</span></div>
+          <div class="mb-2"><span class="text-slate-500">Parse status:</span> <span class="font-medium">{{ incoming_email.parse_status }}</span></div>
+
+          {% if incoming_email.parse_error %}
+            <div class="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-rose-800 text-xs whitespace-pre-wrap">
+              {{ incoming_email.parse_error }}
+            </div>
+          {% endif %}
+        {% else %}
+          <div class="text-slate-500">No linked incoming email.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Payment proofs</h2>
+      </div>
+      <div class="p-5 text-sm">
+        {% if payment_proofs %}
+          <div class="space-y-4">
+            {% for proof in payment_proofs %}
+              <div class="rounded-xl border border-slate-200 px-4 py-4">
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <div class="font-medium text-slate-900">
+                      {{ proof.original_filename or proof.stored_filename }}
+                    </div>
+                    <div class="text-xs text-slate-500 mt-1">
+                      {% if proof.uploaded_at %}
+                        uploaded: {{ proof.uploaded_at.strftime("%d.%m.%Y %H:%M") }}
+                      {% endif %}
+                      {% if proof.content_type %}
+                        • {{ proof.content_type }}
+                      {% endif %}
+                      {% if proof.file_size %}
+                        • {{ proof.file_size }} bytes
+                      {% endif %}
+                    </div>
+                  </div>
+
+                  <div>
+                    {% if proof.review_status == "approved" %}
+                      <span class="inline-flex rounded-lg bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                        approved
+                      </span>
+                    {% elif proof.review_status == "rejected" %}
+                      <span class="inline-flex rounded-lg bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700">
+                        rejected
+                      </span>
+                    {% else %}
+                      <span class="inline-flex rounded-lg bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">
+                        pending
+                      </span>
+                    {% endif %}
+                  </div>
+                </div>
+
+                {% if proof.note %}
+                  <div class="mt-3">
+                    <div class="text-xs text-slate-500 mb-1">Passenger note</div>
+                    <div class="whitespace-pre-wrap text-slate-700">{{ proof.note }}</div>
+                  </div>
+                {% endif %}
+
+                {% if proof.review_note %}
+                  <div class="mt-3">
+                    <div class="text-xs text-slate-500 mb-1">Admin review note</div>
+                    <div class="whitespace-pre-wrap text-slate-700">{{ proof.review_note }}</div>
+                  </div>
+                {% endif %}
+
+                {% if proof.reviewed_at or proof.reviewed_by %}
+                  <div class="mt-3 text-xs text-slate-500">
+                    {% if proof.reviewed_at %}
+                      reviewed: {{ proof.reviewed_at.strftime("%d.%m.%Y %H:%M") }}
+                    {% endif %}
+                    {% if proof.reviewed_by %}
+                      {% if proof.reviewed_at %} • {% endif %}
+                      by: {{ proof.reviewed_by }}
+                    {% endif %}
+                  </div>
+                {% endif %}
+
+                <div class="mt-3">
+                  <a href="{{ proof.file_path }}" target="_blank"
+                     class="text-sm font-medium text-slate-700 underline">
+                    Open file
+                  </a>
+                </div>
+
+                {% if proof.review_status == "pending" %}
+                  <div class="mt-4 flex flex-col gap-3">
+                    <form method="post" action="/admin/payment-proofs/{{ proof.id }}/approve" class="inline">
+                      <button type="submit"
+                              class="inline-flex items-center rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+                        Approve
+                      </button>
+                    </form>
+
+                    <form method="post" action="/admin/payment-proofs/{{ proof.id }}/reject" class="space-y-2">
+                      <textarea
+                        name="review_note"
+                        rows="2"
+                        placeholder="Reject reason / admin note"
+                        class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                      ></textarea>
+                      <button type="submit"
+                              class="inline-flex items-center rounded-xl bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700">
+                        Reject
+                      </button>
+                    </form>
+                  </div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="text-slate-500">No payment proofs uploaded.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">Raw text</h2>
+      </div>
+      <div class="p-5">
+        <pre class="whitespace-pre-wrap text-xs leading-6 text-slate-700">{{ booking.raw_text or "—" }}</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

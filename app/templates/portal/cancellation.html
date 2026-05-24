@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% set is_cancelled_booking = ((booking.booking_status or "")|lower == "cancelled") %}
+{% set has_active_cancellation_request = existing_cancellation and ((existing_cancellation.admin_status or "")|lower in ["pending", "approved", "processed"]) %}
+{% set cancel_button_disabled = is_cancelled_booking or has_active_cancellation_request or (not cancel_policy.allowed) %}
+
+<div class="max-w-4xl mx-auto">
+  <div class="flex items-center justify-between gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl font-bold tracking-tight">{{ t(request, "portal.cancellation.title") }}</h1>
+      <p class="text-sm text-slate-500 mt-1">
+        {{ t(request, "common.unique_id") }}: {{ booking.external_id }}
+      </p>
+    </div>
+
+    <a href="/portal"
+       class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+      ← {{ t(request, "portal.cancellation.back_to_portal") }}
+    </a>
+  </div>
+
+  {% if is_cancelled_booking %}
+    <div class="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-800">
+      <div class="font-semibold text-base mb-1">{{ t(request, "portal.cancellation.cancelled_title") }}</div>
+      <div>{{ t(request, "portal.cancellation.cancelled_text") }}</div>
+    </div>
+  {% elif has_active_cancellation_request %}
+    <div class="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+      <div class="font-semibold text-base mb-1">{{ t(request, "portal.cancellation.already_requested_title") }}</div>
+      <div>{{ t(request, "portal.cancellation.already_requested_text") }}</div>
+    </div>
+  {% endif %}
+
+  <div class="space-y-6">
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">{{ t(request, "portal.cancellation.booking_info") }}</h2>
+      </div>
+
+      <div class="p-5 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+        <div>
+          <div class="text-slate-500">{{ t(request, "portal.cancellation.passenger") }}</div>
+          <div class="font-medium">{{ booking.first_name or "" }} {{ booking.last_name or "" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">{{ t(request, "common.route") }}</div>
+          <div class="font-medium">{{ booking.route_from or "—" }} → {{ booking.route_to or "—" }}</div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">{{ t(request, "common.booking_status") }}</div>
+          <div class="font-medium">
+            {% if is_cancelled_booking %}
+              <span class="inline-flex rounded-lg bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 border border-rose-200">
+                {{ t(request, "booking.status.cancelled") }}
+              </span>
+            {% elif booking.booking_status %}
+              {{ booking.booking_status }}
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">{{ t(request, "common.payment_status") }}</div>
+          <div class="font-medium">
+            {% set payment_status_norm = ((booking.payment_status or "")|lower) %}
+            {% if payment_status_norm == "paid" %}
+              {{ t(request, "payment.status.paid") }}
+            {% elif payment_status_norm == "pending_review" %}
+              {{ t(request, "payment.status.pending_review") }}
+            {% elif payment_status_norm == "rejected" %}
+              {{ t(request, "payment.status.rejected") }}
+            {% elif payment_status_norm == "unpaid" %}
+              {{ t(request, "payment.status.unpaid") }}
+            {% else %}
+              {{ booking.payment_status or "—" }}
+            {% endif %}
+          </div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">{{ t(request, "common.total") }}</div>
+          <div class="font-medium">
+            {% if booking.total is not none %}
+              {{ "%.2f"|format(booking.total) }} {{ booking.currency or "" }}
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+
+        <div>
+          <div class="text-slate-500">{{ t(request, "portal.cancellation.calculated_policy") }}</div>
+          <div class="font-medium">{{ cancel_policy.message }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">{{ t(request, "portal.cancellation.rules_title") }}</h2>
+      </div>
+
+      <div class="p-5 text-sm text-slate-700 space-y-3">
+        <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+          {{ t(request, "portal.cancellation.rule_100")|safe }}
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+          {{ t(request, "portal.cancellation.rule_50")|safe }}
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+          {{ t(request, "portal.cancellation.rule_no_cancel")|safe }}
+        </div>
+      </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-lg font-semibold">{{ t(request, "portal.cancellation.request_title") }}</h2>
+      </div>
+
+      <div class="p-5">
+        {% if cancel_ok %}
+          <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            {{ t(request, "portal.cancellation.ok_message") }}
+          </div>
+        {% endif %}
+
+        {% if cancel_err %}
+          <div class="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            {% if cancel_err == "late" %}
+              {{ t(request, "portal.cancellation.err_late") }}
+            {% elif cancel_err == "exists" %}
+              {{ t(request, "portal.cancellation.err_exists") }}
+            {% else %}
+              {{ t(request, "portal.cancellation.err_generic") }}
+            {% endif %}
+          </div>
+        {% endif %}
+
+        {% if existing_cancellation %}
+          <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+            <div class="font-semibold mb-2">{{ t(request, "portal.cancellation.existing_request_title") }}</div>
+            <div><span class="font-medium">{{ t(request, "portal.cancellation.status") }}:</span> {{ existing_cancellation.admin_status }}</div>
+            <div>
+              <span class="font-medium">{{ t(request, "portal.cancellation.requested_at") }}:</span>
+              {% if existing_cancellation.requested_at %}
+                {{ existing_cancellation.requested_at.strftime("%d.%m.%Y %H:%M") }}
+              {% else %}
+                —
+              {% endif %}
+            </div>
+            <div><span class="font-medium">{{ t(request, "portal.cancellation.refund") }}:</span> {{ existing_cancellation.refund_percent }}%</div>
+            {% if existing_cancellation.refund_amount is not none %}
+              <div><span class="font-medium">{{ t(request, "portal.cancellation.refund_amount") }}:</span> {{ existing_cancellation.refund_amount }} {{ existing_cancellation.currency or "" }}</div>
+            {% endif %}
+            {% if existing_cancellation.reason %}
+              <div class="mt-2 whitespace-pre-wrap"><span class="font-medium">{{ t(request, "portal.cancellation.reason") }}:</span> {{ existing_cancellation.reason }}</div>
+            {% endif %}
+          </div>
+        {% endif %}
+
+        <div class="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          <div>{{ cancel_policy.message }}</div>
+
+          {% if cancel_policy.refund_amount is not none and cancel_policy.currency %}
+            <div class="mt-2">
+              <span class="font-medium">{{ t(request, "portal.cancellation.expected_refund_amount") }}:</span>
+              {{ cancel_policy.refund_amount }} {{ cancel_policy.currency }}
+            </div>
+          {% endif %}
+
+          {% if cancel_policy.hours_left is not none %}
+            <div class="mt-1 text-slate-500">
+              {{ t(request, "portal.cancellation.hours_to_departure") }}: {{ "%.1f"|format(cancel_policy.hours_left) }}
+            </div>
+          {% endif %}
+        </div>
+
+        <form method="post" action="/portal/cancel-booking" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">{{ t(request, "portal.cancellation.reason") }}</label>
+            <textarea
+              name="reason"
+              rows="4"
+              placeholder="{{ t(request, 'portal.cancellation.reason_placeholder') }}"
+              {% if cancel_button_disabled %}disabled{% endif %}
+              class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm {% if cancel_button_disabled %}bg-slate-100 text-slate-500 cursor-not-allowed{% endif %}"
+            ></textarea>
+          </div>
+
+          <button
+            type="submit"
+            {% if cancel_button_disabled %}disabled{% else %}onclick="return confirm('{{ t(request, "portal.cancellation.confirm_submit") }}');"{% endif %}
+            class="inline-flex items-center rounded-xl px-5 py-2.5 text-sm font-semibold
+                   {% if cancel_button_disabled %}
+                     bg-slate-300 text-slate-600 cursor-not-allowed
+                   {% else %}
+                     bg-rose-600 text-white hover:bg-rose-700
+                   {% endif %}">
+            {% if is_cancelled_booking %}
+              {{ t(request, "portal.cancellation.btn_cancelled") }}
+            {% elif has_active_cancellation_request %}
+              {{ t(request, "portal.cancellation.btn_already_submitted") }}
+            {% elif not cancel_policy.allowed %}
+              {{ t(request, "portal.cancellation.btn_not_possible") }}
+            {% else %}
+              {{ t(request, "portal.cancellation.btn_submit") }}
+            {% endif %}
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

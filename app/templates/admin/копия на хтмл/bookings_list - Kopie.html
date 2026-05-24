@@ -1,0 +1,147 @@
+{% extends "admin/bookings_layout.html" %}
+{% block bookings_content %}
+
+<div class="rounded-2xl border border-slate-200 bg-white shadow-sm mb-6">
+  <form method="get" action="/admin/bookings/list" class="p-5 grid grid-cols-1 lg:grid-cols-5 gap-4">
+    <div class="lg:col-span-2">
+      <label class="block text-sm font-medium text-slate-700 mb-1">Search</label>
+      <input type="text"
+             name="q"
+             value="{{ filters.q }}"
+             placeholder="Unique ID / name / phone / email / route"
+             class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Booking status</label>
+      <select name="booking_status" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm">
+        <option value="">All</option>
+        <option value="new" {% if filters.booking_status == "new" %}selected{% endif %}>new</option>
+        <option value="pending_payment" {% if filters.booking_status == "pending_payment" %}selected{% endif %}>pending_payment</option>
+        <option value="paid" {% if filters.booking_status == "paid" %}selected{% endif %}>paid</option>
+        <option value="confirmed" {% if filters.booking_status == "confirmed" %}selected{% endif %}>confirmed</option>
+        <option value="cancelled" {% if filters.booking_status == "cancelled" %}selected{% endif %}>cancelled</option>
+      </select>
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Payment status</label>
+      <select name="payment_status" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm">
+        <option value="">All</option>
+        <option value="unpaid" {% if filters.payment_status == "unpaid" %}selected{% endif %}>unpaid</option>
+        <option value="pending_review" {% if filters.payment_status == "pending_review" %}selected{% endif %}>pending_review</option>
+        <option value="paid" {% if filters.payment_status == "paid" %}selected{% endif %}>paid</option>
+        <option value="rejected" {% if filters.payment_status == "rejected" %}selected{% endif %}>rejected</option>
+      </select>
+    </div>
+
+    <div class="flex items-end">
+      <label class="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm w-full">
+        <input type="checkbox" name="only_unlinked" value="1" {% if filters.only_unlinked %}checked{% endif %}>
+        <span>Only unlinked</span>
+      </label>
+    </div>
+
+    <div class="lg:col-span-5 flex items-center gap-3">
+      <button type="submit"
+              class="inline-flex items-center rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">
+        Filter
+      </button>
+
+      <a href="/admin/bookings/list"
+         class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        Reset
+      </a>
+    </div>
+  </form>
+</div>
+
+<div class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr class="text-left">
+          <th class="px-4 py-3 font-semibold text-slate-700">ID</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Unique ID</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Passenger</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Route</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Seats</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Total</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Trip</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Sync</th>
+          <th class="px-4 py-3 font-semibold text-slate-700">Status</th>
+          <th class="px-4 py-3 font-semibold text-slate-700"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-200">
+        {% for b in bookings %}
+        <tr class="hover:bg-slate-50/70">
+          <td class="px-4 py-3">{{ b.id }}</td>
+          <td class="px-4 py-3 font-medium">{{ b.external_id }}</td>
+          <td class="px-4 py-3">
+            <div class="font-medium text-slate-900">
+              {{ (b.first_name or "") ~ " " ~ (b.last_name or "") }}
+            </div>
+            <div class="text-xs text-slate-500">{{ b.phone or "—" }}</div>
+            <div class="text-xs text-slate-500">{{ b.email or "—" }}</div>
+          </td>
+          <td class="px-4 py-3">
+            <div>{{ b.route_from or "—" }} → {{ b.route_to or "—" }}</div>
+            <div class="text-xs text-slate-500">
+              {% if b.booking_date %}{{ b.booking_date.strftime("%d.%m.%Y") }}{% else %}—{% endif %}
+            </div>
+          </td>
+          <td class="px-4 py-3">{{ b._seat_list_str }}</td>
+          <td class="px-4 py-3">
+            {% if b.total is not none %}
+              {{ "%.2f"|format(b.total) }} {{ b.currency }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">
+            {% if b.trip_id %}
+              <span class="inline-flex rounded-lg bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                #{{ b.trip_id }}
+              </span>
+            {% else %}
+              <span class="inline-flex rounded-lg bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">
+                unlinked
+              </span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">
+            <span class="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+              pax: {{ b._linked_pax_count }}
+            </span>
+          </td>
+          <td class="px-4 py-3">
+            <div class="text-xs">
+              <div class="mb-1">
+                <span class="font-medium">booking:</span> {{ b.booking_status }}
+              </div>
+              <div>
+                <span class="font-medium">payment:</span> {{ b.payment_status }}
+              </div>
+            </div>
+          </td>
+          <td class="px-4 py-3 text-right">
+            <a href="/admin/bookings/{{ b.id }}"
+               class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+              Open
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="10" class="px-4 py-10 text-center text-sm text-slate-500">
+            Няма намерени bookings.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

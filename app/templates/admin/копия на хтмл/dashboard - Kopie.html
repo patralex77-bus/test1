@@ -1,0 +1,864 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="topbar">
+  <a href="/drivers" class="back">← Рейсове</a>
+  <div class="title">
+    <div class="t1">Курс #{{ trip.id }}</div>
+    <div class="t2">
+      {{ trip.route_from or "?" }} → {{ trip.route_to or "?" }}
+      {% if trip.date_time %}
+        • {{ trip.date_time.strftime("%d.%m.%Y") }}
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="importRow">
+    <button id="saveBtn" type="button" class="btn">Запиши</button>
+    <button id="toggleView" type="button" class="btn ghost">Card view</button>
+    <button id="printBtn" type="button" class="btn ghost">Печат / PDF</button>
+    <span id="saveStatus" class="status"></span>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="filters">
+    <input id="search" class="search" placeholder="Търси по име / телефон / място..." />
+    <label class="chip"><input type="checkbox" id="onlyUnchecked" /> само нечекирани</label>
+    <label class="chip"><input type="checkbox" id="onlyUnpaid" /> само неплатили</label>
+  </div>
+</div>
+
+<div id="tableView" class="panel">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:52px">№</th>
+        <th style="width:110px">От</th>
+        <th style="width:110px">До</th>
+        <th>Име</th>
+        <th style="width:140px">Телефон</th>
+        <th style="width:90px">Място</th>
+        <th style="width:160px">Инфо</th>
+        <th style="width:100px">OEBB</th>
+        <th style="width:70px">Регистр.</th>
+        <th style="width:70px">Заплатил</th>
+        <th style="width:120px">Сума</th>
+      </tr>
+    </thead>
+    <tbody id="rowsDriver"></tbody>
+  </table>
+
+  <div class="summaryGrid">
+    <div class="sumCard">
+      <div class="sumTitle">ОТ (бр. пътници)</div>
+      <table class="sumTbl">
+        <thead><tr><th>Град</th><th style="text-align:right">Брой</th></tr></thead>
+        <tbody id="sumFrom"></tbody>
+      </table>
+    </div>
+
+    <div class="sumCard">
+      <div class="sumTitle">ДО (бр. пътници)</div>
+      <table class="sumTbl">
+        <thead><tr><th>Град</th><th style="text-align:right">Брой</th></tr></thead>
+        <tbody id="sumTo"></tbody>
+      </table>
+    </div>
+
+    <div class="sumCard">
+      <div class="sumTitle">Суми</div>
+
+      <div class="totals">
+        <div class="totRow"><div class="totLabel">Очаквани EUR</div><div class="totValue" id="expEUR">0.00</div></div>
+        <div class="totRow"><div class="totLabel">Очаквани UAH</div><div class="totValue" id="expUAH">0.00</div></div>
+
+        <div class="totDivider"></div>
+
+        <div class="totRow"><div class="totLabel">Реални EUR</div><div class="totValue" id="actEUR">0.00</div></div>
+        <div class="totRow"><div class="totLabel">Реални UAH</div><div class="totValue" id="actUAH">0.00</div></div>
+      </div>
+
+      <div class="sumHint">
+        Очаквани = <b>amountDue</b> (ако има), иначе парс от Инфо (voucherRaw).<br/>
+        Реални = amount по валутата от селектора.
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="cardView" class="cards hidden"></div>
+
+<script>
+  window.__DISABLE_LEGACY_APP_JS__ = true;
+  window.DRIVER_TRIP_ID = {{ trip.id | tojson }};
+  window.DRIVER_ROUTE_FROM = {{ (trip.route_from or "") | tojson }};
+  window.DRIVER_ROUTE_TO = {{ (trip.route_to or "") | tojson }};
+</script>
+
+<style>
+  .panel, .tbl, .filters, .importRow, .topbar { font-size: 13px; }
+  .btn, .chip, .search { font-size: 13px; }
+
+  .topbar{ display:flex; gap:12px; align-items:flex-start; margin-bottom:10px; }
+  .back{
+    text-decoration:none; color:#111; font-weight:600;
+    padding:10px 12px; border-radius:12px; background:#f2f2f3; white-space:nowrap;
+  }
+  .title .t1{ font-weight:900; font-size:15px; line-height:1; margin-top:2px; }
+  .title .t2{ color:#555; font-size:14px; margin-top:4px; }
+
+  .panel{ background:#fff; border:1px solid #e8e8ea; border-radius:16px; padding:12px; margin:10px 0; }
+  .importRow{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .btn{ border:1px solid #e3e3e6; background:#fff; border-radius:14px; padding:10px 12px; cursor:pointer; font-weight:800; }
+  .btn.ghost{ background:#f7f7f8; }
+  .btn:disabled{ opacity:.6; cursor:not-allowed; }
+
+  .status{ color:#666; font-size:13px; }
+
+  .filters{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .search{ flex:1; min-width:220px; border:1px solid #e3e3e6; border-radius:14px; padding:10px 12px; font-size:15px; }
+  .chip{ display:inline-flex; gap:8px; align-items:center; border:1px solid #e3e3e6; border-radius:999px; padding:10px 12px; background:#fff; font-size:14px; }
+  .chip input{ width:18px; height:18px; }
+
+  .tbl{ width:100%; border-collapse:collapse; }
+  .tbl th, .tbl td{ border-bottom:1px solid #eee; padding:10px 8px; vertical-align:middle; white-space:normal; }
+  .tbl th{ text-align:left; font-size:13px; color:#444; position:sticky; top:0; background:#fff; }
+
+  .cards{ display:grid; gap:10px; }
+  .hidden{ display:none !important; }
+
+  .cur-select{ height:30px; border:1px solid #e3e3e6; border-radius:10px; padding:0 8px; font-weight:800; background:#fff; }
+  .sum-wrap{ display:inline-flex; align-items:center; gap:8px; }
+  .amt-input{ width:80px; text-align:center; padding:6px 8px; border:1px solid #e3e3e6; border-radius:10px; }
+
+  .summaryGrid{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:12px; }
+  .sumCard{ border:1px solid #ececef; border-radius:16px; padding:12px; background:#fff; }
+  .sumTitle{ font-weight:900; font-size:14px; margin-bottom:8px; }
+  .sumTbl{ width:100%; border-collapse:collapse; }
+  .sumTbl th, .sumTbl td{ padding:6px 4px; border-bottom:1px solid #f0f0f2; font-size:13px; }
+  .sumTbl th{ color:#555; text-align:left; font-weight:900; }
+  .sumTbl td:last-child{ text-align:right; font-weight:900; }
+
+  .totals{ display:flex; flex-direction:column; gap:8px; }
+  .totRow{ display:flex; justify-content:space-between; gap:10px; }
+  .totLabel{ color:#555; font-weight:900; font-size:13px; }
+  .totValue{ font-weight:900; font-size:15px; }
+  .totDivider{ height:1px; background:#eee; margin:6px 0; }
+  .sumHint{ margin-top:10px; color:#777; font-size:12px; }
+
+  @media (max-width: 980px){
+    .summaryGrid{ grid-template-columns: 1fr; }
+  }
+
+  .dirtyRow{ background:#fffbe6; }
+
+  .oebb-note{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-width:78px;
+    padding:4px 8px;
+    border-radius:999px;
+    border:1px solid #fcd34d;
+    background:#fffbeb;
+    color:#92400e;
+    font-weight:900;
+    font-size:11px;
+  }
+
+  .p-card{
+    background:#fff;
+    border:1px solid #e8e8ea;
+    border-radius:16px;
+    padding:12px;
+  }
+  .p-title{ font-weight:800; }
+  .p-sub{ margin-top:4px; color:#555; }
+  .p-sub.muted{ color:#777; word-break:break-word; }
+  .p-oebb{ margin-top:8px; }
+
+  @media print{
+    .back, .importRow, .filters, #cardView { display:none !important; }
+    #tableView { display:block !important; }
+    .panel{ border:none; padding:0; margin:0; }
+    body{ background:#fff !important; }
+
+    .tbl{ display:table !important; width:100% !important; border-collapse:collapse !important; }
+    .tbl thead{ display:table-header-group !important; }
+    .tbl tbody{ display:table-row-group !important; }
+    .tbl tr{ display:table-row !important; }
+    .tbl th, .tbl td{ display:table-cell !important; white-space:nowrap !important; padding:6px 6px !important; }
+    .tbl td::before{ content:none !important; display:none !important; }
+    .tbl th{ position:static !important; }
+
+    .summaryGrid{ grid-template-columns:1fr 1fr 1fr !important; }
+  }
+</style>
+
+<script>
+console.log("DRIVER trip_detail script ✅");
+
+function coalesce(...vals){
+  for (const v of vals){
+    if (v !== undefined && v !== null) return v;
+  }
+  return null;
+}
+
+function normalizePassenger(p){
+  return {
+    id: coalesce(p.id, null),
+
+    passengerNo: coalesce(p.passengerNo, p.passenger_no, ""),
+    fromCity: coalesce(p.fromCity, p.effectiveFromCity, p.manualFromCity, p.from_city, ""),
+    toCity: coalesce(p.toCity, p.effectiveToCity, p.manualToCity, p.to_city, ""),
+    fullName: coalesce(p.fullName, p.effectiveFullName, p.manualFullName, p.full_name, ""),
+    phone: coalesce(p.phone, p.effectivePhone, p.manualPhone, ""),
+    seatNo: coalesce(p.seatNo, p.effectiveSeatNo, p.manualSeatNo, p.seat_no, ""),
+    voucherRaw: coalesce(p.voucherRaw, p.effectiveVoucherRaw, p.manualVoucherRaw, p.voucher_or_amount_raw, ""),
+    voucherCode: coalesce(p.voucherCode, p.voucher_code, ""),
+
+    amountDue: coalesce(p.amountDue, p.amount_due, null),
+    checkedIn: !!coalesce(p.checkedIn, p.checked_in, false),
+    paid: !!coalesce(p.paid, false),
+    amount: coalesce(p.amount, null),
+    currency: coalesce(p.currency, "EUR"),
+    oebb: !!coalesce(p.oebb, false)
+  };
+}
+
+async function fetchPassengers(tripId){
+  const res = await fetch(`/api/trips/${tripId}/passengers`, { credentials:"same-origin" });
+  const data = await res.json().catch(() => ([]));
+  if (!res.ok) throw new Error((data && data.detail) || ("fetchPassengers failed: " + res.status));
+  if (!Array.isArray(data)) return [];
+  return data.map(normalizePassenger);
+}
+
+async function patchPassenger(id, payload){
+  const res = await fetch(`/api/passengers/${id}`,{
+    method:"PATCH",
+    credentials:"same-origin",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(()=> ({}));
+  if (!res.ok) throw new Error(data?.detail || String(res.status));
+  return data;
+}
+
+function matchesFilter(p, q, onlyUnchecked, onlyUnpaid){
+  if (onlyUnchecked && p.checkedIn) return false;
+  if (onlyUnpaid && p.paid) return false;
+  if (!q) return true;
+  const qq = q.toLowerCase();
+  return (
+    (p.fullName || "").toLowerCase().includes(qq) ||
+    (p.phone || "").toLowerCase().includes(qq) ||
+    (p.seatNo || "").toLowerCase().includes(qq) ||
+    (p.voucherRaw || "").toLowerCase().includes(qq) ||
+    (p.fromCity || "").toLowerCase().includes(qq) ||
+    (p.toCity || "").toLowerCase().includes(qq)
+  );
+}
+
+function cleanExcelIntLike(v){
+  if (v === null || v === undefined) return "";
+  let s = String(v).trim();
+  if (!s) return "";
+  return s.replace(/([.,])0+$/, "");
+}
+
+function parseMoney(v){
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  let s = String(v).trim();
+  if (!s) return null;
+  s = s.replace(/[^\d.,-]/g, "").replace(/\s+/g, "");
+  if (s.includes(",") && s.includes(".")) s = s.replace(/\./g, "");
+  s = s.replace(/,/g, ".");
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function inferCurrencyFromRaw(raw){
+  const s = String(raw ?? "").toLowerCase();
+  if (/(грн|uah|₴|гривн(?:а|и)?)/i.test(s)) return "UAH";
+  if (/(євро|евро|eur|€)/i.test(s)) return "EUR";
+  return "EUR";
+}
+
+function parseExpectedFromInfo(raw){
+  const s = String(raw ?? "").trim();
+  if (!s) return { due: null, cur: null };
+
+  if (/(€|eur|євро|евро)/iu.test(s)) {
+    const m = s.match(/(\d[\d\s]*([.,]\d{1,2})?)/);
+    const n = m ? parseMoney(m[1]) : null;
+    if (n != null && n > 0 && n <= 2000) return { due: n, cur: "EUR" };
+    return { due: null, cur: "EUR" };
+  }
+  if (/(uah|грн|гривн(?:а|и)?|₴)/iu.test(s)) {
+    const m = s.match(/(\d[\d\s]*([.,]\d{1,2})?)/);
+    const n = m ? parseMoney(m[1]) : null;
+    if (n != null && n > 0) return { due: n, cur: "UAH" };
+    return { due: null, cur: "UAH" };
+  }
+
+  const m2 = s.match(/^\s*(\d{1,4})(?:[.,](\d{1,2}))?\s*$/);
+  if (!m2) return { due: null, cur: null };
+  const intPart = m2[1];
+  const decPart = m2[2] || "";
+  if (decPart && !/^0{1,2}$/.test(decPart)) return { due: null, cur: null };
+  const n2 = Number(intPart + (decPart ? "." + decPart : ""));
+  if (!Number.isFinite(n2) || n2 <= 0 || n2 > 2000) return { due: null, cur: null };
+  return { due: n2, cur: "EUR" };
+}
+
+function normCityText(v){
+  return String(v || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[._,;:/\\()-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .normalize("NFC");
+}
+
+function foldLatinAccents(s){
+  return String(s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC");
+}
+
+const CITY_ALIASES = {
+  innsbruck: ["innsbruck", "інсбрук", "инсбрук"],
+  salzburg: ["salzburg", "зальцбург", "salzburg sud", "salzburgsud"],
+  wels: ["wels", "вельс"],
+  linz: ["linz", "лінц", "линц"],
+  stpolten: ["st polten", "st pölten", "sankt polten", "st. polten", "ст полтен", "ст.полтен"],
+  wien: ["wien", "vienna", "відень", "видень", "вiдень"],
+
+  villach: ["villach", "філлах", "филлах"],
+  klagenfurt: ["klagenfurt", "клагенфурт"],
+  graz: ["graz", "грац"],
+  bruck: ["bruck", "брук"],
+
+  kyiv: ["kyiv", "kiev", "київ", "киев"],
+  zhytomyr: ["zhytomyr", "zhitomir", "житомир"],
+  rivne: ["rivne", "rovno", "рівне", "ривне", "ровно"],
+  lviv: ["lviv", "lvov", "львів", "львов"]
+};
+
+function cityAliasMatches(input, alias){
+  const s1 = normCityText(input);
+  const s2 = normCityText(alias);
+
+  if (!s1 || !s2) return false;
+  if (s1 === s2) return true;
+  if (s1.includes(s2)) return true;
+
+  const f1 = foldLatinAccents(s1);
+  const f2 = foldLatinAccents(s2);
+
+  return f1 === f2 || f1.includes(f2);
+}
+
+function canonicalCityKey(v){
+  const s = normCityText(v);
+  if (!s) return "";
+
+  for (const [key, aliases] of Object.entries(CITY_ALIASES)){
+    for (const alias of aliases){
+      if (cityAliasMatches(s, alias)) return key;
+    }
+  }
+
+  return s;
+}
+
+function getCurrentRouteCode(){
+  const rf = canonicalCityKey(window.DRIVER_ROUTE_FROM || "");
+  const rt = canonicalCityKey(window.DRIVER_ROUTE_TO || "");
+
+  if (rf === "innsbruck" && rt === "kyiv") return "IK";
+  if (rf === "kyiv" && rt === "innsbruck") return "KI";
+  return "OTHER";
+}
+
+function getRouteSideOrders(){
+  const AT_ORDER = [
+    "innsbruck",
+    "salzburg",
+    "wels",
+    "linz",
+    "stpolten",
+    "wien",
+    "villach",
+    "klagenfurt",
+    "graz",
+    "bruck"
+  ];
+
+  const UA_ORDER = [
+    "kyiv",
+    "zhytomyr",
+    "rivne",
+    "lviv"
+  ];
+
+  const routeCode = getCurrentRouteCode();
+
+  if (routeCode === "IK"){
+    return { fromOrder: AT_ORDER, toOrder: UA_ORDER };
+  }
+  if (routeCode === "KI"){
+    return { fromOrder: UA_ORDER, toOrder: AT_ORDER };
+  }
+
+  return { fromOrder: [], toOrder: [] };
+}
+
+function cityOrderIndex(city, order){
+  const key = canonicalCityKey(city);
+  const idx = order.indexOf(key);
+  return idx === -1 ? 9999 : idx;
+}
+
+function compareCitiesByOrder(a, b, order){
+  const ai = cityOrderIndex(a, order);
+  const bi = cityOrderIndex(b, order);
+  if (ai !== bi) return ai - bi;
+  return String(a || "").localeCompare(String(b || ""), "bg");
+}
+
+function comparePassengersForRoute(a, b){
+  const { fromOrder, toOrder } = getRouteSideOrders();
+
+  const fromCmp = compareCitiesByOrder(a.fromCity, b.fromCity, fromOrder);
+  if (fromCmp !== 0) return fromCmp;
+
+  const toCmp = compareCitiesByOrder(a.toCity, b.toCity, toOrder);
+  if (toCmp !== 0) return toCmp;
+
+  const aSeat = cleanExcelIntLike(a.seatNo || "");
+  const bSeat = cleanExcelIntLike(b.seatNo || "");
+  const aSeatNum = /^\d+$/.test(aSeat) ? Number(aSeat) : 999999;
+  const bSeatNum = /^\d+$/.test(bSeat) ? Number(bSeat) : 999999;
+  if (aSeatNum !== bSeatNum) return aSeatNum - bSeatNum;
+
+  return String(a.fullName || "").localeCompare(String(b.fullName || ""), "bg");
+}
+
+function renderSummary(list){
+  const fromEl = document.getElementById("sumFrom");
+  const toEl   = document.getElementById("sumTo");
+  const expEUR = document.getElementById("expEUR");
+  const expUAH = document.getElementById("expUAH");
+  const actEUR = document.getElementById("actEUR");
+  const actUAH = document.getElementById("actUAH");
+  if (!fromEl || !toEl || !expEUR || !expUAH || !actEUR || !actUAH) return;
+
+  const fromCnt = new Map();
+  const toCnt   = new Map();
+  let expE=0, expU=0, actE=0, actU=0;
+
+  for (const p of list){
+    const fc = String(p.fromCity || "").trim();
+    const tc = String(p.toCity || "").trim();
+    if (fc) fromCnt.set(fc, (fromCnt.get(fc)||0)+1);
+    if (tc) toCnt.set(tc, (toCnt.get(tc)||0)+1);
+
+    const due = parseMoney(p.amountDue);
+    const curDue = String(p.currency || inferCurrencyFromRaw(p.voucherRaw) || "EUR").toUpperCase();
+    if (due != null){
+      if (curDue === "UAH") expU += due; else expE += due;
+    } else {
+      const ex = parseExpectedFromInfo(p.voucherRaw);
+      if (ex.due != null && ex.cur){
+        if (ex.cur === "UAH") expU += ex.due; else expE += ex.due;
+      }
+    }
+
+    const curAct = String(p.currency || inferCurrencyFromRaw(p.voucherRaw) || "EUR").toUpperCase();
+    const amt = parseMoney(p.amount);
+    if (amt != null){
+      if (curAct === "UAH") actU += amt; else actE += amt;
+    }
+  }
+
+  const { fromOrder, toOrder } = getRouteSideOrders();
+
+  const sortEntriesByCustomOrder = (m, order) =>
+    [...m.entries()].sort((a, b) => {
+      const byOrder = compareCitiesByOrder(a[0], b[0], order);
+      if (byOrder !== 0) return byOrder;
+      return b[1] - a[1];
+    });
+
+  fromEl.innerHTML =
+    sortEntriesByCustomOrder(fromCnt, fromOrder).map(([city, c]) =>
+      `<tr><td>${city}</td><td style="text-align:right;font-weight:800">${c}</td></tr>`
+    ).join("") || `<tr><td colspan="2" style="color:#999">Няма</td></tr>`;
+
+  toEl.innerHTML =
+    sortEntriesByCustomOrder(toCnt, toOrder).map(([city, c]) =>
+      `<tr><td>${city}</td><td style="text-align:right;font-weight:800">${c}</td></tr>`
+    ).join("") || `<tr><td colspan="2" style="color:#999">Няма</td></tr>`;
+
+  expEUR.textContent = expE.toFixed(2);
+  expUAH.textContent = expU.toFixed(2);
+  actEUR.textContent = actE.toFixed(2);
+  actUAH.textContent = actU.toFixed(2);
+}
+
+let passengers = [];
+const dirtyIds = new Set();
+
+function snapshot(p){
+  return {
+    checkedIn: !!p.checkedIn,
+    paid: !!p.paid,
+    amount: (p.amount == null) ? null : Number(p.amount),
+    currency: String(p.currency || inferCurrencyFromRaw(p.voucherRaw) || "EUR").toUpperCase(),
+  };
+}
+
+function isDirty(p){
+  const o = p.__orig || snapshot(p);
+  const n = snapshot(p);
+  return (
+    o.checkedIn !== n.checkedIn ||
+    o.paid !== n.paid ||
+    (o.amount ?? null) !== (n.amount ?? null) ||
+    o.currency !== n.currency
+  );
+}
+
+function refreshSaveBtn(){
+  const btn = document.getElementById("saveBtn");
+  if (!btn) return;
+  const n = dirtyIds.size;
+  btn.textContent = n > 0 ? `Запиши (${n})` : "Запиши";
+  btn.disabled = n === 0;
+}
+
+function markDirty(p){
+  if (isDirty(p)) dirtyIds.add(p.id);
+  else dirtyIds.delete(p.id);
+  refreshSaveBtn();
+}
+
+function renderTable(list, allPassengers){
+  const tbody = document.getElementById("rowsDriver");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  if (!list.length){
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 11;
+    td.style.color = "#777";
+    td.style.padding = "14px 8px";
+    td.textContent = "Няма пътници за показване.";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+
+  list.forEach((p, idx) => {
+    const tr = document.createElement("tr");
+
+    const mk = (label, text) => {
+      const td = document.createElement("td");
+      td.setAttribute("data-label", label);
+      td.textContent = text ?? "";
+      return td;
+    };
+
+    const applyDirtyRowClass = () => {
+      if (isDirty(p)) tr.classList.add("dirtyRow");
+      else tr.classList.remove("dirtyRow");
+    };
+
+    tr.appendChild(mk("№", String(idx + 1)));
+    tr.appendChild(mk("От", p.fromCity || ""));
+    tr.appendChild(mk("До", p.toCity || ""));
+    tr.appendChild(mk("Име", p.fullName || ""));
+    tr.appendChild(mk("Телефон", cleanExcelIntLike(p.phone || "")));
+    tr.appendChild(mk("Място", cleanExcelIntLike(p.seatNo || "")));
+    tr.appendChild(mk("Инфо", cleanExcelIntLike(p.voucherRaw || "")));
+    tr.appendChild(mk("OEBB", p.oebb ? "ПРОВЕРИТ" : ""));
+
+    const tdChk = document.createElement("td");
+    tdChk.setAttribute("data-label","Регистр.");
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.checked = !!p.checkedIn;
+    chk.addEventListener("change", () => {
+      p.checkedIn = chk.checked;
+      markDirty(p);
+      applyDirtyRowClass();
+      renderSummary(allPassengers);
+    });
+    tdChk.appendChild(chk);
+    tr.appendChild(tdChk);
+
+    const tdPaid = document.createElement("td");
+    tdPaid.setAttribute("data-label","Заплатил");
+    const paid = document.createElement("input");
+    paid.type = "checkbox";
+    paid.checked = !!p.paid;
+    tdPaid.appendChild(paid);
+    tr.appendChild(tdPaid);
+
+    const tdAmt = document.createElement("td");
+    tdAmt.setAttribute("data-label","Сума");
+
+    const wrap = document.createElement("span");
+    wrap.className = "sum-wrap";
+
+    const sel = document.createElement("select");
+    sel.className = "cur-select";
+    sel.innerHTML = `<option value="EUR">EUR</option><option value="UAH">UAH</option>`;
+    sel.value = String(p.currency || inferCurrencyFromRaw(p.voucherRaw) || "EUR").toUpperCase();
+
+    const inp = document.createElement("input");
+    inp.className = "amt-input";
+    inp.type = "number";
+    inp.step = "0.01";
+    inp.value = (p.amount == null) ? "" : String(p.amount);
+
+    paid.addEventListener("change", () => {
+      const target = paid.checked;
+      p.paid = target;
+
+      if (!target){
+        p.amount = null;
+        inp.value = "";
+      }
+
+      markDirty(p);
+      applyDirtyRowClass();
+      renderSummary(allPassengers);
+    });
+
+    sel.addEventListener("change", () => {
+      p.currency = sel.value;
+      markDirty(p);
+      applyDirtyRowClass();
+      renderSummary(allPassengers);
+    });
+
+    inp.addEventListener("change", () => {
+      const raw = String(inp.value || "").trim();
+      const nextAmt = raw === "" ? null : Number(raw);
+
+      if (nextAmt != null && Number.isFinite(nextAmt)){
+        p.amount = nextAmt;
+        p.paid = true;
+        paid.checked = true;
+      } else {
+        p.amount = null;
+      }
+
+      markDirty(p);
+      applyDirtyRowClass();
+      renderSummary(allPassengers);
+    });
+
+    wrap.appendChild(sel);
+    wrap.appendChild(inp);
+    tdAmt.appendChild(wrap);
+    tr.appendChild(tdAmt);
+
+    applyDirtyRowClass();
+    tbody.appendChild(tr);
+  });
+}
+
+function renderCards(list){
+  const wrap = document.getElementById("cardView");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+
+  if (!list.length){
+    wrap.innerHTML = "<div style='color:#777'>Няма пътници за показване.</div>";
+    return;
+  }
+
+  for (const p of list){
+    const card = document.createElement("div");
+    card.className = "p-card" + (isDirty(p) ? " dirtyRow" : "");
+
+    const oebbText = p.oebb ? `<div class="p-oebb"><span class="oebb-note">ПРОВЕРИТ</span></div>` : "";
+
+    card.innerHTML = `
+      <div class="p-title">${p.fullName || "—"}${p.seatNo ? ` • място ${cleanExcelIntLike(p.seatNo)}` : ""}</div>
+      <div class="p-sub">${p.fromCity || ""} → ${p.toCity || ""}</div>
+      <div class="p-sub">${cleanExcelIntLike(p.phone || "")}</div>
+      <div class="p-sub muted">${cleanExcelIntLike(p.voucherRaw || "")}</div>
+      ${oebbText}
+    `;
+    wrap.appendChild(card);
+  }
+}
+
+async function saveAllChanges(){
+  const saveBtn = document.getElementById("saveBtn");
+  const saveStatus = document.getElementById("saveStatus");
+  const ids = Array.from(dirtyIds);
+
+  if (ids.length === 0){
+    if (saveStatus) saveStatus.textContent = "Няма промени.";
+    return;
+  }
+
+  if (!confirm(`Да запиша ли промените? (редове: ${ids.length})`)) return;
+
+  if (saveBtn) saveBtn.disabled = true;
+  if (saveStatus) saveStatus.textContent = "Записване...";
+
+  let ok = 0;
+  const errors = [];
+
+  for (const id of ids){
+    const p = passengers.find(x => x.id === id);
+    if (!p) continue;
+
+    const o = p.__orig || snapshot(p);
+    const n = snapshot(p);
+    const payload = {};
+
+    if (o.checkedIn !== n.checkedIn) payload.checkedIn = n.checkedIn;
+    if (o.paid !== n.paid) payload.paid = n.paid;
+    if ((o.amount ?? null) !== (n.amount ?? null)) payload.amount = (n.amount ?? null);
+    if (o.currency !== n.currency) payload.currency = n.currency;
+
+    if (Object.keys(payload).length === 0){
+      dirtyIds.delete(id);
+      continue;
+    }
+
+    try{
+      await patchPassenger(id, payload);
+      p.checkedIn = n.checkedIn;
+      p.paid = n.paid;
+      p.amount = n.amount;
+      p.currency = n.currency;
+      p.__orig = snapshot(p);
+      dirtyIds.delete(id);
+      ok += 1;
+    } catch(e){
+      errors.push(`ID ${id}: ${e.message}`);
+    }
+  }
+
+  refreshSaveBtn();
+
+  if (errors.length){
+    if (saveStatus) saveStatus.textContent = `Записани: ${ok}. Грешки: ${errors.length}.`;
+    alert("Грешки при запис:\n\n" + errors.join("\n"));
+  } else {
+    if (saveStatus) saveStatus.textContent = `Записано ✅ (редове: ${ok})`;
+  }
+
+  rerenderGlobal();
+
+  if (saveBtn) saveBtn.disabled = (dirtyIds.size === 0);
+}
+
+let view = "table";
+
+function rerenderGlobal(){
+  const search = document.getElementById("search");
+  const onlyUnchecked = document.getElementById("onlyUnchecked");
+  const onlyUnpaid = document.getElementById("onlyUnpaid");
+  const tableView = document.getElementById("tableView");
+  const cardView = document.getElementById("cardView");
+
+  const q = (search?.value ?? "").trim();
+
+  const filtered = passengers
+    .filter((p) =>
+      matchesFilter(p, q, !!onlyUnchecked?.checked, !!onlyUnpaid?.checked)
+    )
+    .slice()
+    .sort(comparePassengersForRoute);
+
+  if (view === "table"){
+    tableView?.classList.remove("hidden");
+    cardView?.classList.add("hidden");
+    renderTable(filtered, passengers);
+  } else {
+    tableView?.classList.add("hidden");
+    cardView?.classList.remove("hidden");
+    renderCards(filtered);
+  }
+
+  renderSummary(filtered);
+}
+
+async function main(){
+  const tripId = window.DRIVER_TRIP_ID;
+  if (!tripId) return;
+
+  const search = document.getElementById("search");
+  const onlyUnchecked = document.getElementById("onlyUnchecked");
+  const onlyUnpaid = document.getElementById("onlyUnpaid");
+  const toggle = document.getElementById("toggleView");
+  const printBtn = document.getElementById("printBtn");
+  const saveBtn = document.getElementById("saveBtn");
+  const tableView = document.getElementById("tableView");
+  const cardView = document.getElementById("cardView");
+
+  passengers = await fetchPassengers(tripId);
+
+  for (const p of passengers){
+    p.currency = String(p.currency || inferCurrencyFromRaw(p.voucherRaw) || "EUR").toUpperCase();
+    p.__orig = snapshot(p);
+  }
+
+  dirtyIds.clear();
+  refreshSaveBtn();
+
+  saveBtn?.addEventListener("click", saveAllChanges);
+
+  search?.addEventListener("input", rerenderGlobal);
+  onlyUnchecked?.addEventListener("change", rerenderGlobal);
+  onlyUnpaid?.addEventListener("change", rerenderGlobal);
+
+  toggle?.addEventListener("click", () => {
+    view = view === "table" ? "cards" : "table";
+    if (toggle) toggle.textContent = view === "table" ? "Card view" : "Table view";
+    tableView?.classList.toggle("hidden", view !== "table");
+    cardView?.classList.toggle("hidden", view !== "cards");
+    rerenderGlobal();
+  });
+
+  printBtn?.addEventListener("click", () => {
+    view = "table";
+    if (toggle) toggle.textContent = "Card view";
+    tableView?.classList.remove("hidden");
+    cardView?.classList.add("hidden");
+    rerenderGlobal();
+    setTimeout(() => window.print(), 50);
+  });
+
+  window.addEventListener("beforeunload", (e) => {
+    if (dirtyIds.size > 0){
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
+
+  rerenderGlobal();
+}
+
+main();
+</script>
+
+{% endblock %}

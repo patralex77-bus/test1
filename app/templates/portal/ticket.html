@@ -1,0 +1,727 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% set departure_time_value = departure_time_label if departure_time_label is defined and departure_time_label else "—" %}
+{% set arrival_time_value = arrival_time_label if arrival_time_label is defined and arrival_time_label else "—" %}
+
+<div class="ticketPage max-w-5xl mx-auto">
+  <div class="flex items-center justify-between gap-3 mb-6 print:hidden">
+    <div>
+      <h1 class="text-2xl font-bold tracking-tight">{{ t(request, "portal.ticket.page_title") }}</h1>
+      <p class="text-sm text-slate-500 mt-1">
+        {{ t(request, "portal.ticket.unique_id") }}: {{ booking.external_id }}
+      </p>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2">
+      <button type="button"
+              onclick="window.print()"
+              class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        {{ t(request, "portal.ticket.print_ticket") }}
+      </button>
+
+      {% if qr_available %}
+      <a href="/portal/ticket/qr"
+         download="ticket-qr-{{ booking.external_id }}.svg"
+         class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        {{ t(request, "portal.ticket.download_qr") }}
+      </a>
+      {% endif %}
+
+      <a href="/portal/ticket/pdf"
+         class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        {{ t(request, "portal.ticket.download_pdf") }}
+      </a>
+
+      <a href="/portal"
+         class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        ← {{ t(request, "portal.ticket.back_to_portal") }}
+      </a>
+    </div>
+  </div>
+
+  <div class="ticketMainCard">
+    <div class="ticketHeaderWrap">
+      <table class="pdfHeaderTable" role="presentation">
+        <tr>
+          <td class="pdfHeaderLeft">
+            <div class="ticketBrand">A U S T R I A&nbsp;&nbsp;E X P R E S S</div>
+            <div class="ticketTitle">{{ t(request, "portal.ticket.boarding_ticket") }}</div>
+            <div class="ticketSub">
+              {{ t(request, "portal.ticket.unique_id") }}: {{ booking.external_id }}, {{ booking.first_name or "" }} {{ booking.last_name or "" }}
+            </div>
+          </td>
+
+          <td class="pdfHeaderSeat">
+            <div class="headerInfoCell seatCell">
+              <div class="metaLabel">{{ t(request, "portal.ticket.seat_label") }}</div>
+              <div class="metaValue seatValue">{{ selected_seat or "—" }}</div>
+            </div>
+          </td>
+
+          <td class="pdfHeaderRight">
+            {% if qr_available %}
+              <div class="qrCompactWrap">
+                <img
+                  src="/portal/ticket/qr"
+                  alt="{{ t(request, 'portal.ticket.qr_alt') }}"
+                  class="qrCompactImage"
+                />
+              </div>
+              <div class="qrCompactHint">{{ t(request, "portal.ticket.show_during_boarding") }}</div>
+            {% else %}
+              <div class="qrCompactFallback">
+                {{ t(request, "portal.ticket.qr_after_seat") }}
+              </div>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="routeCard">
+      <div class="routeMainLine">
+        <span class="routeCity">{{ booking.route_from or "—" }}</span>
+        <span class="routeArrow">→</span>
+        <span class="routeCity">{{ booking.route_to or "—" }}</span>
+      </div>
+
+      <div class="routeServiceLine">
+        {{ service_label or "—" }}
+      </div>
+
+      <div class="tripInlineRow">
+        <div class="tripInlineItem">
+          <span class="tripInlineLabel">{{ t(request, "portal.ticket.departure") }}:</span>
+          <span class="tripInlineStrong">{{ departure_time_value }}</span>
+          <span class="tripInlineText">
+            {{ stop_points.departure.label or booking.route_from or "—" }},
+            {{ stop_points.departure.address or "—" }}
+          </span>
+        </div>
+      </div>
+
+      <div class="tripInlineRow">
+        <div class="tripInlineItem">
+          <span class="tripInlineLabel">{{ t(request, "portal.ticket.arrival") }}:</span>
+          <span class="tripInlineStrong">{{ arrival_time_value }}</span>
+          <span class="tripInlineText">
+            {{ stop_points.arrival.label or booking.route_to or "—" }},
+            {{ stop_points.arrival.address or "—" }}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="priceCard">
+      <div class="sectionTitle">{{ t(request, "portal.ticket.ticket_price") }}</div>
+
+      {% if ticket_lines is defined and ticket_lines %}
+        <div class="priceList">
+          {% for line in ticket_lines %}
+            <div class="priceRow">
+              <div class="priceType">
+                {{ line.ticket_type_raw or t(request, "portal.ticket.ticket_fallback") }}
+                {% if line.qty %}
+                  <span class="priceQty">× {{ line.qty }}</span>
+                {% endif %}
+              </div>
+
+              <div class="priceValue">
+                {% if line.is_dual_currency %}
+                  {% if line.line_total_uah is not none %}{{ "{:,.2f}".format(line.line_total_uah) }} UAH{% endif %}
+                  {% if line.line_total_uah is not none and line.line_total_eur is not none %} / {% endif %}
+                  {% if line.line_total_eur is not none %}{{ "%.2f"|format(line.line_total_eur) }} EUR{% endif %}
+                {% else %}
+                  {% if line.line_total is not none %}
+                    {{ "%.2f"|format(line.line_total) }} {{ line.currency }}
+                  {% else %}
+                    —
+                  {% endif %}
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="priceList">
+          <div class="priceRow">
+            <div class="priceType">{{ t(request, "portal.ticket.ticket_fallback") }}</div>
+            <div class="priceValue">
+              {% if booking.total is not none %}
+                {{ "%.2f"|format(booking.total) }} {{ booking.currency or "" }}
+              {% else %}
+                —
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="metaGrid">
+      <div class="metaBox">
+        <div class="metaLabel">{{ t(request, "portal.ticket.payment_status") }}</div>
+        <div class="metaValue paymentOk">{{ booking.payment_status or "—" }}</div>
+      </div>
+
+      <div class="metaBox">
+        <div class="metaLabel">{{ t(request, "portal.ticket.booking_status") }}</div>
+        <div class="metaValue">{{ booking.booking_status or "—" }}</div>
+      </div>
+    </div>
+
+    <div class="noticeCard termsCard">
+      <div class="sectionTitle">{{ t(request, "portal.ticket.terms_title") }}</div>
+      <div class="noticeText">
+        {{ t(request, "portal.ticket.terms_p1") }}
+        <br><br>
+        {{ t(request, "portal.ticket.terms_p2") }}
+        <br><br>
+        {{ t(request, "portal.ticket.terms_p3") }}
+        <br><br>
+        {{ t(request, "portal.ticket.terms_p4") }}
+        <br><br>
+        {{ t(request, "portal.ticket.terms_p5") }}
+      </div>
+    </div>
+
+    <div class="noticeCard warningCard">
+      <div class="sectionTitle">{{ t(request, "portal.ticket.warning_title") }}</div>
+      <div class="noticeText">
+        {{ t(request, "portal.ticket.warning_p1") }}
+        <br><br>
+        {{ t(request, "portal.ticket.warning_p2") }}
+        <br><br>
+        {{ t(request, "portal.ticket.warning_p3") }}
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+@page {
+  size: A4 portrait;
+  margin: 7mm;
+}
+
+.ticketPage{
+  width:100%;
+}
+
+.ticketMainCard{
+  background:#fff;
+  border:1px solid #e2e8f0;
+  border-radius:24px;
+  box-shadow:0 1px 3px rgba(15,23,42,.06);
+  padding:22px;
+}
+
+.ticketHeaderWrap{
+  padding-bottom:14px;
+  border-bottom:1px solid #e2e8f0;
+}
+
+.pdfHeaderTable{
+  width:100%;
+  border-collapse:collapse;
+  table-layout:fixed;
+}
+
+.pdfHeaderLeft,
+.pdfHeaderSeat,
+.pdfHeaderRight{
+  vertical-align:top;
+}
+
+.pdfHeaderLeft{
+  width:auto;
+  padding-right:12px;
+}
+
+.pdfHeaderSeat{
+  width:120px;
+  padding-right:12px;
+}
+
+.pdfHeaderRight{
+  width:150px;
+  text-align:center;
+}
+
+.ticketBrand{
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.18em;
+  color:#0f172a;
+}
+
+.ticketTitle{
+  margin-top:4px;
+  font-size:26px;
+  line-height:1.08;
+  font-weight:800;
+  color:#0f172a;
+}
+
+.ticketSub{
+  margin-top:4px;
+  font-size:13px;
+  color:#64748b;
+  line-height:1.3;
+}
+
+.headerInfoCell,
+.metaBox{
+  border:1px solid #e2e8f0;
+  border-radius:16px;
+  padding:10px 12px;
+  background:#fff;
+}
+
+.metaLabel{
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:#64748b;
+}
+
+.metaValue{
+  margin-top:4px;
+  font-size:14px;
+  font-weight:700;
+  color:#0f172a;
+}
+
+.seatValue{
+  font-size:22px;
+}
+
+.paymentOk{
+  color:#047857;
+}
+
+.qrCompactWrap{
+  width:136px;
+  height:136px;
+  padding:8px;
+  border:1px solid #e2e8f0;
+  border-radius:18px;
+  background:#f8fafc;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  box-sizing:border-box;
+}
+
+.qrCompactImage{
+  width:100%;
+  max-width:118px;
+  height:auto;
+}
+
+.qrCompactHint{
+  margin-top:8px;
+  font-size:11px;
+  color:#64748b;
+  text-align:center;
+}
+
+.qrCompactFallback{
+  border:1px solid #e2e8f0;
+  border-radius:16px;
+  background:#f8fafc;
+  padding:14px;
+  font-size:12px;
+  line-height:1.45;
+  color:#64748b;
+}
+
+.routeCard{
+  margin-top:14px;
+  padding:14px 16px;
+  border-radius:20px;
+  background:linear-gradient(135deg,#f8fafc 0%, #eef2ff 100%);
+  border:1px solid #dbeafe;
+}
+
+.routeMainLine{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.routeCity{
+  font-size:22px;
+  font-weight:800;
+  color:#0f172a;
+}
+
+.routeArrow{
+  font-size:20px;
+  font-weight:800;
+  color:#475569;
+}
+
+.routeServiceLine{
+  margin-top:6px;
+  font-size:13px;
+  color:#475569;
+}
+
+.tripInlineRow{
+  margin-top:8px;
+}
+
+.tripInlineItem{
+  font-size:13px;
+  line-height:1.5;
+  color:#334155;
+}
+
+.tripInlineLabel{
+  font-weight:800;
+  color:#475569;
+  margin-right:6px;
+}
+
+.tripInlineStrong{
+  font-weight:800;
+  color:#0f172a;
+  margin-right:8px;
+}
+
+.tripInlineText{
+  color:#475569;
+}
+
+.priceCard,
+.noticeCard{
+  margin-top:14px;
+  border-radius:20px;
+  padding:14px 16px;
+}
+
+.priceCard{
+  border:1px solid #dbeafe;
+  background:#f8fbff;
+}
+
+.noticeCard{
+  border:1px solid #e2e8f0;
+  background:#f8fafc;
+}
+
+.warningCard{
+  border-color:#fde68a;
+  background:#fffbeb;
+}
+
+.sectionTitle{
+  font-size:14px;
+  font-weight:800;
+  color:#0f172a;
+}
+
+.priceList{
+  margin-top:8px;
+  display:grid;
+  gap:8px;
+}
+
+.priceRow{
+  display:flex;
+  justify-content:space-between;
+  gap:16px;
+  align-items:flex-start;
+  padding:8px 0;
+  border-bottom:1px dashed #cbd5e1;
+}
+
+.priceRow:last-child{
+  border-bottom:none;
+  padding-bottom:0;
+}
+
+.priceType{
+  font-size:14px;
+  font-weight:700;
+  color:#0f172a;
+}
+
+.priceQty{
+  color:#64748b;
+  font-weight:600;
+}
+
+.priceValue{
+  font-size:15px;
+  font-weight:800;
+  color:#0f172a;
+  text-align:right;
+  white-space:nowrap;
+}
+
+.metaGrid{
+  margin-top:14px;
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:10px;
+}
+
+.noticeText{
+  margin-top:8px;
+  font-size:13px;
+  line-height:1.48;
+  color:#334155;
+}
+
+@media (max-width: 900px){
+  .pdfHeaderTable,
+  .pdfHeaderTable tbody,
+  .pdfHeaderTable tr,
+  .pdfHeaderTable td{
+    display:block;
+    width:100% !important;
+  }
+
+  .pdfHeaderSeat,
+  .pdfHeaderRight{
+    margin-top:12px;
+    padding-right:0;
+  }
+
+  .pdfHeaderRight{
+    text-align:left;
+  }
+}
+
+@media print {
+  .print\:hidden {
+    display:none !important;
+  }
+
+  html, body {
+    width:210mm;
+    height:297mm;
+    background:#fff !important;
+    margin:0 !important;
+    padding:0 !important;
+  }
+
+  .ticketPage,
+  .max-w-5xl {
+    max-width:100% !important;
+    margin:0 !important;
+    padding:0 !important;
+  }
+
+  .ticketMainCard,
+  .headerInfoCell,
+  .metaBox,
+  .routeCard,
+  .priceCard,
+  .noticeCard,
+  .qrCompactWrap {
+    box-shadow:none !important;
+    break-inside:avoid !important;
+    page-break-inside:avoid !important;
+  }
+
+  .ticketMainCard{
+    padding:12px !important;
+    border-color:#cbd5e1 !important;
+    border-radius:16px !important;
+  }
+
+  .ticketHeaderWrap{
+    padding-bottom:8px !important;
+  }
+
+  .pdfHeaderTable{
+    display:table !important;
+    width:100% !important;
+    border-collapse:collapse !important;
+    table-layout:fixed !important;
+  }
+
+  .pdfHeaderTable tbody{
+    display:table-row-group !important;
+  }
+
+  .pdfHeaderTable tr{
+    display:table-row !important;
+  }
+
+  .pdfHeaderTable td{
+    display:table-cell !important;
+    vertical-align:top !important;
+  }
+
+  .pdfHeaderLeft{
+    width:auto !important;
+    padding-right:10px !important;
+  }
+
+  .pdfHeaderSeat{
+    width:108px !important;
+    padding-right:10px !important;
+  }
+
+  .pdfHeaderRight{
+    width:118px !important;
+    text-align:center !important;
+  }
+
+  .ticketBrand{
+    font-size:11px !important;
+    line-height:1.08 !important;
+    letter-spacing:.18em !important;
+  }
+
+  .ticketTitle{
+    font-size:22px !important;
+    line-height:1.04 !important;
+    margin-top:3px !important;
+  }
+
+  .ticketSub{
+    font-size:12px !important;
+    line-height:1.22 !important;
+    margin-top:4px !important;
+    color:#334155 !important;
+  }
+
+  .headerInfoCell,
+  .metaBox{
+    padding:9px 10px !important;
+    border-radius:12px !important;
+  }
+
+  .metaLabel{
+    font-size:9px !important;
+    line-height:1.05 !important;
+  }
+
+  .metaValue{
+    margin-top:2px !important;
+    font-size:13px !important;
+    line-height:1.18 !important;
+  }
+
+  .seatValue{
+    font-size:18px !important;
+    line-height:1.05 !important;
+  }
+
+  .qrCompactWrap{
+    width:108px !important;
+    height:108px !important;
+    padding:6px !important;
+    border-radius:14px !important;
+  }
+
+  .qrCompactImage{
+    width:92px !important;
+    max-width:92px !important;
+    height:92px !important;
+    object-fit:contain !important;
+    display:block !important;
+    margin:0 auto !important;
+  }
+
+  .qrCompactHint{
+    margin-top:4px !important;
+    font-size:9px !important;
+    line-height:1.15 !important;
+  }
+
+  .qrCompactFallback{
+    font-size:9px !important;
+    line-height:1.25 !important;
+    padding:10px !important;
+    border-radius:12px !important;
+  }
+
+  .routeCard{
+    margin-top:10px !important;
+    padding:11px 12px !important;
+    border-radius:16px !important;
+  }
+
+  .routeCity{
+    font-size:19px !important;
+    line-height:1.08 !important;
+  }
+
+  .routeArrow{
+    font-size:17px !important;
+    line-height:1 !important;
+  }
+
+  .routeServiceLine{
+    margin-top:4px !important;
+    font-size:11px !important;
+    line-height:1.25 !important;
+  }
+
+  .tripInlineRow{
+    margin-top:5px !important;
+  }
+
+  .tripInlineItem{
+    font-size:10.8px !important;
+    line-height:1.34 !important;
+  }
+
+  .tripInlineLabel,
+  .tripInlineStrong,
+  .tripInlineText,
+  .priceValue,
+  .metaValue{
+    color:#000 !important;
+  }
+
+  .priceCard,
+  .noticeCard{
+    margin-top:10px !important;
+    padding:10px 12px !important;
+    border-radius:16px !important;
+  }
+
+  .sectionTitle{
+    font-size:12px !important;
+    line-height:1.12 !important;
+  }
+
+  .priceRow{
+    padding:5px 0 !important;
+  }
+
+  .priceType{
+    font-size:11px !important;
+    line-height:1.2 !important;
+  }
+
+  .priceValue{
+    font-size:12px !important;
+    line-height:1.2 !important;
+  }
+
+  .metaGrid{
+    margin-top:10px !important;
+    gap:8px !important;
+  }
+
+  .noticeText{
+    margin-top:6px !important;
+    font-size:9.4px !important;
+    line-height:1.24 !important;
+    color:#111827 !important;
+  }
+}
+</style>
+
+{% endblock %}

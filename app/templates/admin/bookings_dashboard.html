@@ -1,0 +1,816 @@
+{% extends "admin/bookings_layout.html" %}
+{% block bookings_content %}
+
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 w-full">
+  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div class="text-sm text-slate-500">Total bookings</div>
+    <div class="mt-2 text-3xl font-bold text-slate-900">{{ stats.total_bookings }}</div>
+  </div>
+
+  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div class="text-sm text-slate-500">Paid</div>
+    <div class="mt-2 text-3xl font-bold text-emerald-600">{{ stats.total_paid }}</div>
+  </div>
+
+  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div class="text-sm text-slate-500">Pending review</div>
+    <div class="mt-2 text-3xl font-bold text-rose-600">{{ stats.total_pending_review }}</div>
+  </div>
+
+  <div class="rounded-2xl border border-sky-200 bg-white p-5 shadow-sm">
+    <div class="text-sm text-slate-500">New today</div>
+    <div class="mt-2 text-3xl font-bold text-sky-600">{{ stats.total_today_bookings }}</div>
+    <div class="mt-2 text-xs text-slate-500">00:00 – 24:00</div>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-4 gap-4 mb-6">
+  <div class="rounded-2xl border border-rose-200 bg-white shadow-sm">
+    <div class="border-b border-rose-200 px-4 py-3 flex items-center justify-between gap-3">
+      <h2 class="text-base font-semibold text-rose-700">Bank / PayPal without proof ≤ 72h</h2>
+      <span class="inline-flex rounded-xl bg-rose-50 px-3 py-1 text-sm font-semibold text-rose-700">
+        {{ critical.bank_paypal_missing_proof_le_72|length }}
+      </span>
+    </div>
+    <div class="p-4">
+      {% if critical.bank_paypal_missing_proof_le_72 %}
+        <div class="space-y-2">
+          {% for item in critical.bank_paypal_missing_proof_le_72[:5] %}
+            <div class="rounded-xl border border-slate-200 p-3">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="font-semibold text-slate-900 truncate">#{{ item.id }} • {{ item.passenger_name }}</div>
+                  <div class="text-sm text-slate-600 truncate">{{ item.route }}</div>
+                  <div class="text-xs text-slate-500 mt-1">Departure: {{ item.departure_str }} • In: {{ item.hours_left_str }}</div>
+                </div>
+                <a href="{{ item.url }}"
+                   class="shrink-0 inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  Open
+                </a>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="text-sm text-slate-500">No critical bookings in this group.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="rounded-2xl border border-rose-200 bg-white shadow-sm">
+    <div class="border-b border-rose-200 px-4 py-3 flex items-center justify-between gap-3">
+      <h2 class="text-base font-semibold text-rose-700">Cash not confirmed ≤ 72h</h2>
+      <span class="inline-flex rounded-xl bg-rose-50 px-3 py-1 text-sm font-semibold text-rose-700">
+        {{ critical.cash_not_confirmed_le_72|length }}
+      </span>
+    </div>
+    <div class="p-4">
+      {% if critical.cash_not_confirmed_le_72 %}
+        <div class="space-y-2">
+          {% for item in critical.cash_not_confirmed_le_72[:5] %}
+            <div class="rounded-xl border border-slate-200 p-3">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="font-semibold text-slate-900 truncate">#{{ item.id }} • {{ item.passenger_name }}</div>
+                  <div class="text-sm text-slate-600 truncate">{{ item.route }}</div>
+                  <div class="text-xs text-slate-500 mt-1">Departure: {{ item.departure_str }} • In: {{ item.hours_left_str }}</div>
+                </div>
+                <a href="{{ item.url }}"
+                   class="shrink-0 inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  Open
+                </a>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="text-sm text-slate-500">No critical bookings in this group.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="rounded-2xl border border-indigo-200 bg-white shadow-sm">
+    <div class="border-b border-indigo-200 px-4 py-3 flex items-center justify-between gap-3">
+      <h2 class="text-base font-semibold text-indigo-700">Dispatcher must assign seats now</h2>
+      <span class="inline-flex rounded-xl bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-700">
+        {{ critical.dispatcher_seat_assignment_needed|length }}
+      </span>
+    </div>
+
+    <div class="p-4">
+      {% if critical.dispatcher_seat_assignment_needed %}
+        <div class="space-y-2">
+          {% for item in critical.dispatcher_seat_assignment_needed[:5] %}
+            <div class="rounded-xl border border-slate-200 p-3">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="font-semibold text-slate-900 truncate">#{{ item.id }} • {{ item.passenger_name }}</div>
+                  <div class="text-sm text-slate-600 truncate">{{ item.route }}</div>
+                  <div class="text-xs text-slate-500 mt-1">Departure: {{ item.departure_str }} • In: {{ item.hours_left_str }}</div>
+                </div>
+                <a href="{{ item.url }}"
+                   class="shrink-0 inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  Open
+                </a>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="text-sm text-slate-500">No bookings are waiting for dispatcher seat assignment right now.</div>
+      {% endif %}
+    </div>
+  </div>
+<div class="rounded-2xl border border-amber-200 bg-white shadow-sm">
+  <div class="border-b border-amber-200 px-4 py-3 flex items-center justify-between gap-3">
+    <h2 class="text-base font-semibold text-amber-700">Pending cancellations</h2>
+    <span class="inline-flex rounded-xl bg-amber-50 px-3 py-1 text-sm font-semibold text-amber-700">
+      {{ critical.pending_cancellations|length }}
+    </span>
+  </div>
+  <div class="p-4">
+    {% if critical.pending_cancellations %}
+      <div class="space-y-2">
+        {% for item in critical.pending_cancellations[:5] %}
+          <div class="rounded-xl border border-slate-200 p-3">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="font-semibold text-slate-900 truncate">
+                  #{{ item.id }} • {{ item.passenger_name }}
+                </div>
+                <div class="text-sm text-slate-600 truncate">
+                  {{ item.route }}
+                </div>
+                <div class="text-xs text-slate-500 mt-1">
+                  Requested: {{ item.requested_str }}{% if item.travel_str and item.travel_str != "—" %} • Travel: {{ item.travel_str }}{% endif %}
+                </div>
+                <div class="text-xs text-slate-500 mt-1">
+                  Refund: {{ item.refund_percent }}%
+                  {% if item.external_id %} • Booking {{ item.external_id }}{% endif %}
+                </div>
+              </div>
+              <a href="{{ item.url }}"
+                 class="shrink-0 inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                Review
+              </a>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="text-sm text-slate-500">No pending cancellation requests.</div>
+    {% endif %}
+  </div>
+</div>
+
+</div>
+
+
+<div class="w-full">
+  <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+    <div class="flex items-center justify-between">
+      <button id="calPrev"
+        class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold active:scale-[0.99]">
+        ←
+      </button>
+
+      <div class="text-sm font-semibold text-slate-800" id="calTitle">—</div>
+
+      <button id="calNext"
+        class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold active:scale-[0.99]">
+        →
+      </button>
+    </div>
+
+    <div class="mt-3 grid grid-cols-7 gap-2 text-xs font-semibold text-slate-500">
+      <div class="text-center">Пн</div>
+      <div class="text-center">Вт</div>
+      <div class="text-center">Ср</div>
+      <div class="text-center">Чт</div>
+      <div class="text-center">Пт</div>
+      <div class="text-center">Сб</div>
+      <div class="text-center">Нд</div>
+    </div>
+
+    <div class="mt-2 grid grid-cols-7 gap-2" id="calGrid"></div>
+
+    <div class="mt-3 flex flex-wrap gap-2 text-xs">
+      <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+        <span class="h-3 w-3 rounded-sm" style="background:#fee2e2"></span> AT - UA
+      </span>
+      <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+        <span class="h-3 w-3 rounded-sm" style="background:#dbeafe"></span> UA - AT
+      </span>
+      <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+        <span class="h-3 w-3 rounded-sm" style="background:linear-gradient(135deg,#fee2e2 0 50%,#dbeafe 50% 100%)"></span> И двата
+      </span>
+    </div>
+
+    <div class="mt-6">
+      <div class="flex items-center justify-between">
+        <div class="text-sm font-semibold text-slate-800">Status by direction</div>
+        <div class="text-xs text-slate-500" id="selectedDayHint">—</div>
+      </div>
+
+      <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3" id="dayDirectionTabs"></div>
+      <div class="mt-4" id="dayDirectionDetails"></div>
+
+      <div class="mt-3 text-xs text-slate-500">
+        Избери ден от календара, после направление, за да видиш seat map и списъка с пътници.
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .cal-day{
+    height:56px;
+    border:1px solid #e2e8f0;
+    border-radius:14px;
+    background:#fff;
+    padding:6px 8px;
+    font-size:13px;
+    color:#0f172a;
+    user-select:none;
+    position:relative;
+  }
+
+  .cal-day.muted{
+    color:#94a3b8;
+    background:#fafafa;
+  }
+
+  .cal-day.selected{
+    outline:2px solid #0f172a;
+    outline-offset:1px;
+  }
+
+  .cal-day .daynum{
+    position:absolute;
+    top:6px;
+    right:8px;
+    font-weight:500;
+    line-height:1;
+  }
+
+  .cal-day .pax-top-left{
+    position:absolute;
+    top:6px;
+    left:8px;
+    font-size:11px;
+    font-weight:700;
+    line-height:1;
+    padding:2px 6px;
+    border-radius:999px;
+    border:1px solid rgba(0,0,0,.10);
+    background:rgba(255,255,255,.78);
+  }
+
+  .cal-day .pax-bottom-right{
+    position:absolute;
+    bottom:6px;
+    right:8px;
+    font-size:11px;
+    font-weight:700;
+    line-height:1;
+    padding:2px 6px;
+    border-radius:999px;
+    border:1px solid rgba(0,0,0,.10);
+    background:rgba(255,255,255,.78);
+  }
+
+  .dash-dir-btn{
+    border:1px solid #e2e8f0;
+    border-radius:16px;
+    padding:14px 16px;
+    background:#fff;
+    text-align:left;
+    transition:.15s ease;
+  }
+
+  .dash-dir-btn.active{
+    outline:2px solid #0f172a;
+    outline-offset:1px;
+  }
+
+  .seat-map{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+
+  .seat-row{
+    display:grid;
+    grid-template-columns:repeat(14, minmax(0, 1fr));
+    gap:6px;
+  }
+
+  .seat-cell{
+    height:30px;
+    border-radius:10px;
+    border:1px solid #e2e8f0;
+    font-size:11px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:#fff;
+    color:#334155;
+  }
+
+  .seat-cell.taken{
+    background:#0f172a;
+    color:#fff;
+    border-color:#0f172a;
+  }
+
+  .seat-cell.empty{
+    background:transparent;
+    border-color:transparent;
+  }
+</style>
+
+<script>
+  const DASHBOARD_DAYS = {{ dashboard_calendar_data | tojson }};
+  const SEAT_LAYOUT = {{ seat_layout | tojson }};
+
+  function dashYmd(dt){
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, "0");
+    const d = String(dt.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function dashStartOfCalendarMonth(year, monthIndex){
+    const first = new Date(year, monthIndex, 1);
+    const dow = (first.getDay() + 6) % 7;
+    const start = new Date(year, monthIndex, 1 - dow);
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+
+  function escHtml(s){
+    return String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function normalizeSeatValue(v){
+    let s = String(v ?? "").trim();
+    if (/^\d+\.0+$/.test(s)) s = s.replace(/\.0+$/, "");
+    return s;
+  }
+
+  function hasDirectionData(dir){
+    if (!dir || typeof dir !== "object") return false;
+    if (dir.present === true) return true;
+    if (Array.isArray(dir.passengers) && dir.passengers.length) return true;
+    if (Array.isArray(dir.taken_seats) && dir.taken_seats.length) return true;
+    if (Array.isArray(dir.bank_paypal_missing_proof_le72) && dir.bank_paypal_missing_proof_le72.length) return true;
+    if (Array.isArray(dir.bank_paypal_missing_proof_le_72) && dir.bank_paypal_missing_proof_le_72.length) return true;
+    if (Array.isArray(dir.cash_not_confirmed_le72) && dir.cash_not_confirmed_le72.length) return true;
+    if (Array.isArray(dir.cash_not_confirmed_le_72) && dir.cash_not_confirmed_le_72.length) return true;
+    if (Array.isArray(dir.dispatcher_seat_assignment_needed) && dir.dispatcher_seat_assignment_needed.length) return true;
+    if (Number(dir.total_confirmed || 0) > 0) return true;
+    if (Number(dir.booking_count || 0) > 0) return true;
+    if (Number(dir.total_bookings || 0) > 0) return true;
+    if (Number(dir.count || 0) > 0) return true;
+    return false;
+  }
+
+  function directionReservationCount(dir){
+    if (!dir) return 0;
+    if (Number(dir.total_confirmed || 0) > 0) return Number(dir.total_confirmed || 0);
+    if (Number(dir.booking_count || 0) > 0) return Number(dir.booking_count || 0);
+    if (Number(dir.total_bookings || 0) > 0) return Number(dir.total_bookings || 0);
+    if (Number(dir.count || 0) > 0) return Number(dir.count || 0);
+    if (Array.isArray(dir.passengers) && dir.passengers.length) return dir.passengers.length;
+    return 0;
+  }
+
+  function getDirectionsForDay(dateKey){
+    const info = DASHBOARD_DAYS[dateKey] || {};
+    const dirs = [];
+
+    if (info.red && hasDirectionData(info.red)) {
+      dirs.push({ ...info.red, _dirKey: "red", _slot: "red" });
+    }
+
+    if (info.blue && hasDirectionData(info.blue)) {
+      dirs.push({ ...info.blue, _dirKey: "blue", _slot: "blue" });
+    }
+
+    if (!dirs.length && Array.isArray(info.directions)) {
+      info.directions.forEach((dir, idx) => {
+        if (hasDirectionData(dir)) {
+          dirs.push({
+            ...dir,
+            _dirKey: String(dir.key || dir.dir_key || `dir_${idx}`),
+            _slot: idx === 0 ? "red" : "blue"
+          });
+        }
+      });
+    }
+
+    if (!dirs.length && info.directions && typeof info.directions === "object") {
+      Object.entries(info.directions).forEach(([key, dir], idx) => {
+        if (hasDirectionData(dir)) {
+          dirs.push({
+            ...dir,
+            _dirKey: String(key),
+            _slot: idx === 0 ? "red" : "blue"
+          });
+        }
+      });
+    }
+
+    return dirs;
+  }
+
+  function getDirInfoByKey(dateKey, dirKey){
+    return getDirectionsForDay(dateKey).find(x => String(x._dirKey) === String(dirKey)) || null;
+  }
+
+  function renderDashboardCalendar(viewDate){
+    const grid = document.getElementById("calGrid");
+    const title = document.getElementById("calTitle");
+    if (!grid || !title) return;
+
+    const year = viewDate.getFullYear();
+    const month = viewDate.getMonth();
+    const monthName = viewDate.toLocaleString("bg-BG", { month: "long", year: "numeric" });
+    title.textContent = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+
+    grid.innerHTML = "";
+    const start = dashStartOfCalendarMonth(year, month);
+    const selected = window.__DASH_SELECTED_DATE__ || "";
+
+    for (let i = 0; i < 42; i++){
+      const day = new Date(start);
+      day.setDate(start.getDate() + i);
+
+      const inMonth = day.getMonth() === month;
+      const key = dashYmd(day);
+      const dirs = getDirectionsForDay(key);
+
+      const firstDir = dirs[0] || null;
+      const secondDir = dirs[1] || null;
+
+      const firstCount = directionReservationCount(firstDir);
+      const secondCount = directionReservationCount(secondDir);
+
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "cal-day" + (inMonth ? "" : " muted") + (selected === key ? " selected" : "");
+
+      let html = `<div class="daynum">${day.getDate()}</div>`;
+
+      if (firstDir && firstCount > 0) {
+        html += `<div class="pax-top-left">${firstCount}</div>`;
+      }
+
+      if (secondDir && secondCount > 0) {
+        html += `<div class="pax-bottom-right">${secondCount}</div>`;
+      }
+
+      cell.innerHTML = html;
+
+      if (firstDir && secondDir) {
+        cell.style.background = "linear-gradient(135deg,#fee2e2 0 50%,#dbeafe 50% 100%)";
+      } else if (firstDir) {
+        cell.style.background = firstDir._slot === "red" ? "#fee2e2" : "#dbeafe";
+      } else {
+        cell.style.background = "";
+      }
+
+      cell.addEventListener("click", () => {
+        window.__DASH_SELECTED_DATE__ = key;
+        window.__DASH_SELECTED_DIR__ = "";
+        renderDashboardCalendar(viewDate);
+        renderDirectionTabsForDay(key);
+        renderDirectionDetailsForDay(key, "");
+      });
+
+      grid.appendChild(cell);
+    }
+  }
+
+  function renderItemsList(items){
+    if (!items || !items.length){
+      return `<div class="text-xs text-slate-400">0</div>`;
+    }
+
+    return `
+      <div class="space-y-1">
+        <div class="text-xs font-semibold text-slate-700">${items.length}</div>
+        ${items.slice(0, 4).map(item => `
+          <a href="${item.url}" class="block text-xs text-slate-600 underline underline-offset-2">
+            #${item.id} • ${escHtml(item.passenger_name)} • ${escHtml(item.hours_left_str)}
+          </a>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function renderSeatMap(takenSeats){
+    const taken = new Set((takenSeats || []).map(x => normalizeSeatValue(x)));
+    const rowsHtml = SEAT_LAYOUT.map(row => {
+      const cells = row.map(seat => {
+        if (seat === null){
+          return `<div class="seat-cell empty"></div>`;
+        }
+        const key = normalizeSeatValue(seat);
+        const takenClass = taken.has(key) ? " taken" : "";
+        return `<div class="seat-cell${takenClass}">${key}</div>`;
+      }).join("");
+      return `<div class="seat-row">${cells}</div>`;
+    }).join("");
+
+    return `<div class="seat-map">${rowsHtml}</div>`;
+  }
+
+  function passengerFullName(p){
+    const fn = String(p.first_name || "").trim();
+    const ln = String(p.last_name || "").trim();
+    const joined = `${fn} ${ln}`.trim();
+    return joined || String(p.passenger_name || "").trim() || "—";
+  }
+
+  function renderPassengersTable(passengers){
+    if (!passengers || !passengers.length){
+      return `<div class="text-sm text-slate-500">Няма пътници за това направление.</div>`;
+    }
+
+    return `
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead>
+            <tr class="border-b border-slate-200 text-left text-slate-500">
+              <th class="px-3 py-2 font-medium">Име / Фамилия</th>
+              <th class="px-3 py-2 font-medium">Телефон</th>
+              <th class="px-3 py-2 font-medium">Място</th>
+              <th class="px-3 py-2 font-medium">Действие</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${passengers.map(p => {
+              const id = String(p.id);
+              const seat = normalizeSeatValue(p.seat_no || "");
+              const lockedBadge = p.seat_locked_by_admin
+                ? `<span class="ml-2 inline-flex rounded-lg bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">admin</span>`
+                : "";
+
+              return `
+                <tr class="border-b border-slate-100">
+                  <td class="px-3 py-3 align-top">${escHtml(passengerFullName(p))}</td>
+                  <td class="px-3 py-3 align-top">${escHtml(p.phone || "—")}</td>
+                  <td class="px-3 py-3 align-top">${escHtml(seat || "—")}${lockedBadge}</td>
+                  <td class="px-3 py-3 align-top">
+                    <button type="button"
+                      class="change-seat-btn inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      data-passenger-id="${id}">
+                      Смени място
+                    </button>
+                  </td>
+                </tr>
+                <tr id="seat-form-row-${id}" class="hidden bg-slate-50">
+                  <td colspan="4" class="px-3 py-3">
+                    <div class="flex flex-wrap items-center gap-3">
+                      <label class="text-sm text-slate-600">Ново място</label>
+                      <input
+                        id="seat-input-${id}"
+                        type="text"
+                        value="${escHtml(seat)}"
+                        class="w-28 rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="напр. 12"
+                      />
+                      <button type="button"
+                        class="save-seat-btn inline-flex items-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                        data-passenger-id="${id}">
+                        Запиши
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function renderDirectionTabsForDay(dateKey){
+    const wrap = document.getElementById("dayDirectionTabs");
+    const hint = document.getElementById("selectedDayHint");
+    if (!wrap) return;
+
+    if (hint) hint.textContent = dateKey || "—";
+
+    if (!dateKey){
+      wrap.innerHTML = `<div class="text-xs text-slate-500">Избери дата от календара.</div>`;
+      return;
+    }
+
+    const dirs = getDirectionsForDay(dateKey);
+    if (!dirs.length){
+      wrap.innerHTML = `<div class="text-xs text-slate-500">Няма направления за тази дата.</div>`;
+      return;
+    }
+
+    const selected = window.__DASH_SELECTED_DIR__ || "";
+
+    wrap.innerHTML = dirs.map(dir => {
+      const chip = dir._slot === "red" ? "bg-rose-50 text-rose-700" : "bg-blue-50 text-blue-700";
+      const reservationCount = directionReservationCount(dir);
+
+      return `
+        <button type="button"
+          class="dash-dir-btn ${selected === dir._dirKey ? "active" : ""}"
+          data-dir-key="${dir._dirKey}">
+          <div class="flex items-center justify-between gap-3">
+            <div class="inline-flex rounded-xl px-3 py-1 text-sm font-semibold ${chip}">
+              ${escHtml(dir.label || dir.route || dir._dirKey)}
+            </div>
+            <div class="text-xs text-slate-500 text-right">
+              <div>Bookings: <span class="font-semibold">${reservationCount}</span></div>
+              <div>Issues: <span class="font-semibold">${Number(dir.issue_count || 0)}</span></div>
+            </div>
+          </div>
+        </button>
+      `;
+    }).join("");
+
+    wrap.querySelectorAll("[data-dir-key]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-dir-key") || "";
+        window.__DASH_SELECTED_DIR__ = (window.__DASH_SELECTED_DIR__ === key) ? "" : key;
+        renderDirectionTabsForDay(dateKey);
+        renderDirectionDetailsForDay(dateKey, window.__DASH_SELECTED_DIR__ || "");
+      });
+    });
+  }
+
+  function renderDirectionDetailsForDay(dateKey, dirKey){
+    const wrap = document.getElementById("dayDirectionDetails");
+    if (!wrap) return;
+
+    if (!dateKey){
+      wrap.innerHTML = "";
+      return;
+    }
+
+    if (!dirKey){
+      wrap.innerHTML = `<div class="text-xs text-slate-500">Натисни направление, за да видиш подробностите.</div>`;
+      return;
+    }
+
+    const dirInfo = getDirInfoByKey(dateKey, dirKey);
+    if (!dirInfo){
+      wrap.innerHTML = `<div class="text-xs text-slate-500">Няма данни за избраното направление.</div>`;
+      return;
+    }
+
+    const titleBg = dirInfo._slot === "red" ? "bg-rose-50 text-rose-700" : "bg-blue-50 text-blue-700";
+    const proofItems = dirInfo.bank_paypal_missing_proof_le72 || dirInfo.bank_paypal_missing_proof_le_72 || [];
+    const cashItems = dirInfo.cash_not_confirmed_le72 || dirInfo.cash_not_confirmed_le_72 || [];
+    const passengers = dirInfo.passengers || [];
+    const takenSeats = (dirInfo.taken_seats || []).map(x => normalizeSeatValue(x));
+    const totalConfirmed = directionReservationCount(dirInfo);
+
+    wrap.innerHTML = `
+      <div class="rounded-2xl border border-slate-200 p-4">
+        <div class="flex items-center justify-between gap-3">
+          <div class="inline-flex rounded-xl px-3 py-1 text-sm font-semibold ${titleBg}">
+            ${escHtml(dirInfo.label || dirInfo.route || dirKey)}
+          </div>
+          <div class="text-xs text-slate-500">
+            Issues: <span class="font-semibold">${Number(dirInfo.issue_count || 0)}</span>
+          </div>
+        </div>
+
+        <div class="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div class="rounded-xl border border-slate-200 p-4">
+            <div class="text-xs font-semibold text-slate-700 mb-2">Bank / PayPal without proof ≤ 72h</div>
+            ${renderItemsList(proofItems)}
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-4">
+            <div class="text-xs font-semibold text-slate-700 mb-2">Cash not confirmed ≤ 72h</div>
+            ${renderItemsList(cashItems)}
+          </div>
+
+          <div class="rounded-xl border border-slate-200 p-4">
+            <div class="text-xs font-semibold text-slate-700 mb-2">TOTAL confirmed</div>
+            <div class="text-3xl font-bold text-slate-900">${totalConfirmed}</div>
+          </div>
+        </div>
+
+        <div class="mt-4 rounded-xl border border-slate-200 p-4">
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-xs font-semibold text-slate-700">Seat map</div>
+            <div class="text-xs text-slate-500">Taken seats: ${takenSeats.length}</div>
+          </div>
+          ${renderSeatMap(takenSeats)}
+        </div>
+
+        <div class="mt-4 rounded-xl border border-slate-200 p-4">
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-xs font-semibold text-slate-700">Passengers</div>
+            <div class="text-xs text-slate-500">${passengers.length}</div>
+          </div>
+          ${renderPassengersTable(passengers)}
+        </div>
+      </div>
+    `;
+
+    bindSeatChangeActions(dateKey, dirKey);
+  }
+
+  function bindSeatChangeActions(dateKey, dirKey){
+    document.querySelectorAll(".change-seat-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const passengerId = btn.getAttribute("data-passenger-id");
+        const row = document.getElementById(`seat-form-row-${passengerId}`);
+        if (row) row.classList.toggle("hidden");
+      });
+    });
+
+    document.querySelectorAll(".save-seat-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const passengerId = btn.getAttribute("data-passenger-id");
+        await savePassengerSeat(dateKey, dirKey, passengerId);
+      });
+    });
+  }
+
+  async function savePassengerSeat(dateKey, dirKey, passengerId){
+    const input = document.getElementById(`seat-input-${passengerId}`);
+    if (!input) return;
+
+    const newSeat = normalizeSeatValue(input.value);
+    if (!/^\d{1,2}$/.test(newSeat)){
+      alert("Невалидно място.");
+      return;
+    }
+
+    const res = await fetch(`/admin/passengers/${passengerId}/assign-seat`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seat_no: newSeat })
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok){
+      alert(data.detail || "Seat change failed.");
+      return;
+    }
+
+    const dirInfo = getDirInfoByKey(dateKey, dirKey);
+    if (!dirInfo) return;
+
+    const passengers = dirInfo.passengers || [];
+    const p = passengers.find(x => String(x.id) === String(passengerId));
+    const oldSeat = p && p.seat_no ? normalizeSeatValue(p.seat_no) : "";
+
+    if (p){
+      p.seat_no = normalizeSeatValue(data.seat_no || newSeat);
+      p.seat_locked_by_admin = true;
+    }
+
+    const taken = new Set((dirInfo.taken_seats || []).map(x => normalizeSeatValue(x)));
+    if (oldSeat) taken.delete(oldSeat);
+    taken.add(normalizeSeatValue(data.seat_no || newSeat));
+    dirInfo.taken_seats = Array.from(taken);
+
+    renderDirectionDetailsForDay(dateKey, dirKey);
+  }
+
+  (function(){
+    let viewDate = new Date();
+    viewDate.setDate(1);
+
+    renderDashboardCalendar(viewDate);
+    renderDirectionTabsForDay(window.__DASH_SELECTED_DATE__ || "");
+    renderDirectionDetailsForDay(window.__DASH_SELECTED_DATE__ || "", window.__DASH_SELECTED_DIR__ || "");
+
+    document.getElementById("calPrev")?.addEventListener("click", () => {
+      viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1);
+      renderDashboardCalendar(viewDate);
+      renderDirectionTabsForDay(window.__DASH_SELECTED_DATE__ || "");
+      renderDirectionDetailsForDay(window.__DASH_SELECTED_DATE__ || "", window.__DASH_SELECTED_DIR__ || "");
+    });
+
+    document.getElementById("calNext")?.addEventListener("click", () => {
+      viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1);
+      renderDashboardCalendar(viewDate);
+      renderDirectionTabsForDay(window.__DASH_SELECTED_DATE__ || "");
+      renderDirectionDetailsForDay(window.__DASH_SELECTED_DATE__ || "", window.__DASH_SELECTED_DIR__ || "");
+    });
+  })();
+</script>
+
+{% endblock %}

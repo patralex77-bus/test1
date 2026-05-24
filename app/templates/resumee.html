@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="flex items-center justify-between gap-3">
+  <div>
+    <h1 class="text-xl font-semibold tracking-tight">Резюме</h1>
+    <p class="text-sm text-slate-500">
+      По месеци и по седмици: пътници по направления, прогнозни и реални приходи (EUR/UAH отделно) + натоварване (50 места/рейс).
+    </p>
+  </div>
+
+  <a href="/trips"
+     class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold active:scale-[0.99]">
+    ← Назад
+  </a>
+</div>
+
+<button id="fixAmountsBtn"
+  class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold active:scale-[0.99]">
+  Fix amounts (еднократно)
+</button>
+
+<script>
+  document.getElementById("fixAmountsBtn")?.addEventListener("click", async () => {
+    if (!confirm("Сигурен ли си? Това чисти отровени суми > 2000 EUR / > 200000 UAH.")) return;
+
+    const res = await fetch("/admin/fix-amounts", { method:"POST", credentials:"same-origin" });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      alert("Грешка: " + (data?.detail || res.status));
+      return;
+    }
+
+    alert("OK ✅\n" + JSON.stringify(data, null, 2));
+    location.reload();
+  });
+</script>
+
+
+<style>
+  .load-bad { background: #fee2e2; color: #7f1d1d; border: 1px solid #fecaca; }
+  .load-ok  { background: #ecfeff; color: #155e75; border: 1px solid #a5f3fc; }
+
+  /* по-четима таблица */
+  .tbl { border-collapse: separate; border-spacing: 0; }
+  .tbl th, .tbl td { white-space: nowrap; }
+  .tbl thead th { position: sticky; top: 0; background: #fff; z-index: 1; }
+  .tbl thead tr:first-child th { border-bottom: 1px solid #e2e8f0; }
+  .tbl thead tr:nth-child(2) th { border-bottom: 1px solid #e2e8f0; }
+
+  .ghead { background:#f8fafc; color:#334155; }
+  .subhead { background:#fff; color:#64748b; font-size: 12px; }
+
+  .sepL { border-left: 1px solid #e2e8f0; }
+  .sepR { border-right: 1px solid #e2e8f0; }
+</style>
+
+<div class="mt-4 space-y-6">
+  {% if not months or months|length == 0 %}
+    <div class="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
+      Няма данни.
+    </div>
+  {% endif %}
+
+  {% for m in months %}
+    <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+      <div class="flex items-start justify-between gap-3 flex-wrap">
+        <div class="text-sm font-semibold text-slate-800">
+          {{ m.label }}
+        </div>
+
+        <div class="text-xs text-slate-500 text-right">
+          <div>
+            Общо пътници:
+            Innsbruck→Kyiv: <span class="font-semibold text-slate-700">{{ m.totals.IK.pax }}</span> |
+            Kyiv→Innsbruck: <span class="font-semibold text-slate-700">{{ m.totals.KI.pax }}</span>
+          </div>
+
+          <div class="mt-1">
+            Прогноза EUR:
+            <span class="font-semibold text-slate-700">
+              {{ "%.2f"|format(m.totals.IK.forecast.EUR + m.totals.KI.forecast.EUR) }}
+            </span>
+            · Прогноза UAH:
+            <span class="font-semibold text-slate-700">
+              {{ "%.2f"|format(m.totals.IK.forecast.UAH + m.totals.KI.forecast.UAH) }}
+            </span>
+          </div>
+
+          <div class="mt-1">
+            Реално EUR:
+            <span class="font-semibold text-slate-700">
+              {{ "%.2f"|format(m.totals.IK.real.EUR + m.totals.KI.real.EUR) }}
+            </span>
+            · Реално UAH:
+            <span class="font-semibold text-slate-700">
+              {{ "%.2f"|format(m.totals.IK.real.UAH + m.totals.KI.real.UAH) }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {# ===== Таблица 1: Пътници + Приходи (групирани колони) ===== #}
+      <div class="mt-3 overflow-auto">
+        <div class="text-xs font-semibold text-slate-700 mb-2">Пътници и приходи (по седмици)</div>
+
+        <table class="tbl w-full text-sm">
+          <thead>
+            <!-- Group header -->
+            <tr class="text-xs ghead">
+              <th class="text-left font-semibold py-2" rowspan="2">Седмица</th>
+
+              <th class="text-center font-semibold py-2 sepL" colspan="5">Рейс I→K</th>
+              <th class="text-center font-semibold py-2 sepL" colspan="5">Рейс K→I</th>
+
+              <th class="text-center font-semibold py-2 sepL" colspan="2">Общо (седмица)</th>
+            </tr>
+
+            <!-- Sub header -->
+            <tr class="subhead">
+              <!-- I→K -->
+              <th class="text-right font-semibold py-2 sepL">Пътн.</th>
+              <th class="text-right font-semibold py-2">Прогн. EUR</th>
+              <th class="text-right font-semibold py-2">Прогн. UAH</th>
+              <th class="text-right font-semibold py-2">Реално EUR</th>
+              <th class="text-right font-semibold py-2">Реално UAH</th>
+
+              <!-- K→I -->
+              <th class="text-right font-semibold py-2 sepL">Пътн.</th>
+              <th class="text-right font-semibold py-2">Прогн. EUR</th>
+              <th class="text-right font-semibold py-2">Прогн. UAH</th>
+              <th class="text-right font-semibold py-2">Реално EUR</th>
+              <th class="text-right font-semibold py-2">Реално UAH</th>
+
+              <!-- Totals -->
+              <th class="text-right font-semibold py-2 sepL">EUR</th>
+              <th class="text-right font-semibold py-2">UAH</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for w in m.weeks %}
+              <tr class="border-t border-slate-100">
+                <td class="py-2">
+                  {{ w.ws.strftime("%d.%m.%Y") }} – {{ w.we.strftime("%d.%m.%Y") }}
+                </td>
+
+                <!-- I→K -->
+                <td class="py-2 text-right sepL">{{ w.IK.pax }}</td>
+                <td class="py-2 text-right">{{ "%.2f"|format(w.IK.forecast.EUR) }}</td>
+                <td class="py-2 text-right">{{ "%.2f"|format(w.IK.forecast.UAH) }}</td>
+                <td class="py-2 text-right">{{ "%.2f"|format(w.IK.real.EUR) }}</td>
+                <td class="py-2 text-right">{{ "%.2f"|format(w.IK.real.UAH) }}</td>
+
+                <!-- K→I -->
+                <td class="py-2 text-right sepL">{{ w.KI.pax }}</td>
+                <td class="py-2 text-right">{{ "%.2f"|format(w.KI.forecast.EUR) }}</td>
+                <td class="py-2 text-right">{{ "%.2f"|format(w.KI.forecast.UAH) }}</td>
+                <td class="py-2 text-right">{{ "%.2f"|format(w.KI.real.EUR) }}</td>
+                <td class="py-2 text-right">{{ "%.2f"|format(w.KI.real.UAH) }}</td>
+
+                <!-- Week totals (реално) -->
+                <td class="py-2 text-right sepL">
+                  {{ "%.2f"|format(w.IK.real.EUR + w.KI.real.EUR) }}
+                </td>
+                <td class="py-2 text-right">
+                  {{ "%.2f"|format(w.IK.real.UAH + w.KI.real.UAH) }}
+                </td>
+              </tr>
+            {% endfor %}
+
+            <tr class="border-t border-slate-200">
+              <td class="py-2 text-slate-600">Общо за месеца</td>
+
+              <!-- I→K -->
+              <td class="py-2 text-right sepL">{{ m.totals.IK.pax }}</td>
+              <td class="py-2 text-right">{{ "%.2f"|format(m.totals.IK.forecast.EUR) }}</td>
+              <td class="py-2 text-right">{{ "%.2f"|format(m.totals.IK.forecast.UAH) }}</td>
+              <td class="py-2 text-right">{{ "%.2f"|format(m.totals.IK.real.EUR) }}</td>
+              <td class="py-2 text-right">{{ "%.2f"|format(m.totals.IK.real.UAH) }}</td>
+
+              <!-- K→I -->
+              <td class="py-2 text-right sepL">{{ m.totals.KI.pax }}</td>
+              <td class="py-2 text-right">{{ "%.2f"|format(m.totals.KI.forecast.EUR) }}</td>
+              <td class="py-2 text-right">{{ "%.2f"|format(m.totals.KI.forecast.UAH) }}</td>
+              <td class="py-2 text-right">{{ "%.2f"|format(m.totals.KI.real.EUR) }}</td>
+              <td class="py-2 text-right">{{ "%.2f"|format(m.totals.KI.real.UAH) }}</td>
+
+              <!-- Month totals (реално) -->
+              <td class="py-2 text-right sepL">
+                {{ "%.2f"|format(m.totals.IK.real.EUR + m.totals.KI.real.EUR) }}
+              </td>
+              <td class="py-2 text-right">
+                {{ "%.2f"|format(m.totals.IK.real.UAH + m.totals.KI.real.UAH) }}
+              </td>
+            </tr>
+
+          </tbody>
+        </table>
+      </div>
+
+      {# ===== Таблица 2: Натоварване (50 места/рейс) ===== #}
+      <div class="mt-6 overflow-auto">
+        <div class="text-xs font-semibold text-slate-700 mb-2">Натоварване (макс 50 места / рейс)</div>
+
+        <table class="tbl w-full text-sm">
+          <thead>
+            <tr class="text-xs text-slate-500">
+              <th class="text-left font-semibold py-2">Седмица</th>
+              <th class="text-right font-semibold py-2 sepL">Рейсове (I→K)</th>
+              <th class="text-right font-semibold py-2">Натоварване (I→K)</th>
+              <th class="text-right font-semibold py-2 sepL">Рейсове (K→I)</th>
+              <th class="text-right font-semibold py-2">Натоварване (K→I)</th>
+              <th class="text-right font-semibold py-2 sepL">Натоварване общо</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for w in m.weeks %}
+              {% set tripsIK = w.IK.trips|default(0) %}
+              {% set tripsKI = w.KI.trips|default(0) %}
+              {% set capIK = tripsIK * 50 %}
+              {% set capKI = tripsKI * 50 %}
+              {% set capAll = capIK + capKI %}
+
+              {% set loadIK = (w.IK.pax / capIK) if capIK > 0 else 0 %}
+              {% set loadKI = (w.KI.pax / capKI) if capKI > 0 else 0 %}
+              {% set loadAll = ((w.IK.pax + w.KI.pax) / capAll) if capAll > 0 else 0 %}
+
+              <tr class="border-t border-slate-100">
+                <td class="py-2">
+                  {{ w.ws.strftime("%d.%m.%Y") }} – {{ w.we.strftime("%d.%m.%Y") }}
+                </td>
+
+                <td class="py-2 text-right sepL">{{ tripsIK }}</td>
+                <td class="py-2 text-right">
+                  <span class="inline-flex items-center justify-end px-2 py-1 rounded-full {% if loadIK < 0.40 %}load-bad{% else %}load-ok{% endif %}">
+                    {{ "%.0f"|format(loadIK * 100) }}%
+                  </span>
+                </td>
+
+                <td class="py-2 text-right sepL">{{ tripsKI }}</td>
+                <td class="py-2 text-right">
+                  <span class="inline-flex items-center justify-end px-2 py-1 rounded-full {% if loadKI < 0.40 %}load-bad{% else %}load-ok{% endif %}">
+                    {{ "%.0f"|format(loadKI * 100) }}%
+                  </span>
+                </td>
+
+                <td class="py-2 text-right sepL">
+                  <span class="inline-flex items-center justify-end px-2 py-1 rounded-full {% if loadAll < 0.40 %}load-bad{% else %}load-ok{% endif %}">
+                    {{ "%.0f"|format(loadAll * 100) }}%
+                  </span>
+                </td>
+              </tr>
+            {% endfor %}
+
+            {% set mTripsIK = m.totals.IK.trips|default(0) %}
+            {% set mTripsKI = m.totals.KI.trips|default(0) %}
+            {% set mCapIK = mTripsIK * 50 %}
+            {% set mCapKI = mTripsKI * 50 %}
+            {% set mCapAll = mCapIK + mCapKI %}
+
+            {% set mLoadIK = (m.totals.IK.pax / mCapIK) if mCapIK > 0 else 0 %}
+            {% set mLoadKI = (m.totals.KI.pax / mCapKI) if mCapKI > 0 else 0 %}
+            {% set mLoadAll = ((m.totals.IK.pax + m.totals.KI.pax) / mCapAll) if mCapAll > 0 else 0 %}
+
+            <tr class="border-t border-slate-200">
+              <td class="py-2 text-slate-600">Общо за месеца</td>
+
+              <td class="py-2 text-right sepL">{{ mTripsIK }}</td>
+              <td class="py-2 text-right">
+                <span class="inline-flex items-center justify-end px-2 py-1 rounded-full {% if mLoadIK < 0.40 %}load-bad{% else %}load-ok{% endif %}">
+                  {{ "%.0f"|format(mLoadIK * 100) }}%
+                </span>
+              </td>
+
+              <td class="py-2 text-right sepL">{{ mTripsKI }}</td>
+              <td class="py-2 text-right">
+                <span class="inline-flex items-center justify-end px-2 py-1 rounded-full {% if mLoadKI < 0.40 %}load-bad{% else %}load-ok{% endif %}">
+                  {{ "%.0f"|format(mLoadKI * 100) }}%
+                </span>
+              </td>
+
+              <td class="py-2 text-right sepL">
+                <span class="inline-flex items-center justify-end px-2 py-1 rounded-full {% if mLoadAll < 0.40 %}load-bad{% else %}load-ok{% endif %}">
+                  {{ "%.0f"|format(mLoadAll * 100) }}%
+                </span>
+              </td>
+            </tr>
+
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  {% endfor %}
+</div>
+
+{% endblock %}
