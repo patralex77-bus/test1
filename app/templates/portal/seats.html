@@ -494,6 +494,18 @@
   });
 
   rerender();
+
+  // Автоматично обновяване, ако админът междувременно е назначил/сменил място.
+  // Така пътникът няма нужда винаги да натиска Refresh.
+  setInterval(() => {
+    refreshAvailability();
+  }, 15000);
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      refreshAvailability();
+    }
+  });
 })();
 </script>
 
