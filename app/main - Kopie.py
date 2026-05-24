@@ -45,6 +45,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text, case, or_, cast, String
 
+from playwright.sync_api import sync_playwright
 
 from .db import Base, engine, get_db
 from . import crud
@@ -205,6 +206,499 @@ STOP_ADDRESS_BOOK = {
 }
 
 
+PDF_TICKET_ONE_PAGE_CSS = r"""
+@page {
+  size: A4 portrait;
+  margin: 0;
+}
+
+html, body {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 210mm !important;
+  height: 297mm !important;
+  min-height: 297mm !important;
+  background: #ffffff !important;
+  -webkit-print-color-adjust: exact !important;
+  print-color-adjust: exact !important;
+  overflow: hidden !important;
+  font-family: Arial, Helvetica, sans-serif !important;
+}
+
+.print\:hidden {
+  display: none !important;
+}
+
+.ticketPage,
+.max-w-5xl,
+.max-w-4xl {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.ticketMainCard {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 297mm !important;
+  min-height: 297mm !important;
+  margin: 0 !important;
+  padding: 6.2mm 7mm !important;
+  background: #fff !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+}
+
+/* ===== HEADER ===== */
+.ticketHeaderWrap {
+  margin: 0 !important;
+  padding: 0 0 5px 0 !important;
+  border-bottom: 1px solid #cbd5e1 !important;
+}
+
+.pdfHeaderTable {
+  width: 100% !important;
+  table-layout: fixed !important;
+  border-collapse: collapse !important;
+  border-spacing: 0 !important;
+  display: table !important;
+}
+
+.pdfHeaderTable tbody {
+  display: table-row-group !important;
+}
+
+.pdfHeaderTable tr {
+  display: table-row !important;
+}
+
+.pdfHeaderTable td,
+.pdfHeaderLeft,
+.pdfHeaderSeat,
+.pdfHeaderRight {
+  display: table-cell !important;
+  vertical-align: top !important;
+  float: none !important;
+  clear: none !important;
+}
+
+.pdfHeaderLeft {
+  width: auto !important;
+  padding-right: 7px !important;
+}
+
+.pdfHeaderSeat {
+  width: 29mm !important;
+  padding-right: 6px !important;
+}
+
+.pdfHeaderRight {
+  width: 35mm !important;
+  text-align: center !important;
+}
+
+.ticketBrand {
+  margin: 0 !important;
+  font-size: 11px !important;
+  line-height: 1 !important;
+  font-weight: 800 !important;
+  letter-spacing: .17em !important;
+  color: #0f172a !important;
+  white-space: nowrap !important;
+  word-break: keep-all !important;
+  overflow-wrap: normal !important;
+}
+
+.ticketTitle {
+  margin: 2px 0 0 0 !important;
+  font-size: 23px !important;
+  line-height: 1.02 !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+  white-space: nowrap !important;
+}
+
+.ticketSub {
+  margin-top: 3px !important;
+  font-size: 12.8px !important;
+  line-height: 1.16 !important;
+  font-weight: 600 !important;
+  color: #475569 !important;
+}
+
+.headerInfoCell,
+.metaBox {
+  padding: 7px 8px !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  background: #fff !important;
+  box-shadow: none !important;
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
+}
+
+.metaLabel {
+  margin: 0 !important;
+  font-size: 8.5px !important;
+  line-height: 1.03 !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: .06em !important;
+  color: #64748b !important;
+}
+
+.metaValue {
+  margin-top: 2px !important;
+  font-size: 12.8px !important;
+  line-height: 1.08 !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+}
+
+.seatValue {
+  font-size: 19px !important;
+  line-height: 1 !important;
+  font-weight: 800 !important;
+}
+
+.paymentOk {
+  color: #047857 !important;
+}
+
+.qrCompactWrap {
+  width: 33mm !important;
+  height: 33mm !important;
+  padding: 1.8mm !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  background: #f8fafc !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+}
+
+.qrCompactImage {
+  width: 29mm !important;
+  height: 29mm !important;
+  max-width: 29mm !important;
+  max-height: 29mm !important;
+  display: block !important;
+  object-fit: contain !important;
+  margin: 0 auto !important;
+}
+
+.qrCompactHint {
+  margin-top: 2px !important;
+  font-size: 7.6px !important;
+  line-height: 1.05 !important;
+  color: #64748b !important;
+  text-align: center !important;
+}
+
+.qrCompactFallback {
+  padding: 7px !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  background: #f8fafc !important;
+  font-size: 8.4px !important;
+  line-height: 1.1 !important;
+  color: #64748b !important;
+}
+
+/* ===== ROUTE ===== */
+.routeCard {
+  margin-top: 6px !important;
+  padding: 8px 10px !important;
+  border: 1px solid #dbeafe !important;
+  border-radius: 12px !important;
+  background: linear-gradient(135deg,#f8fafc 0%, #eef2ff 100%) !important;
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
+}
+
+.routeMainLine {
+  display: flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  flex-wrap: wrap !important;
+  margin: 0 !important;
+}
+
+.routeCity {
+  font-size: 18px !important;
+  line-height: 1.02 !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+}
+
+.routeArrow {
+  font-size: 16px !important;
+  line-height: 1 !important;
+  font-weight: 800 !important;
+  color: #475569 !important;
+}
+
+.routeServiceLine {
+  margin-top: 3px !important;
+  font-size: 10.6px !important;
+  line-height: 1.1 !important;
+  color: #475569 !important;
+}
+
+.tripInlineRow {
+  margin-top: 4px !important;
+}
+
+.tripInlineItem {
+  font-size: 10.2px !important;
+  line-height: 1.2 !important;
+  color: #334155 !important;
+}
+
+.tripInlineLabel {
+  margin-right: 4px !important;
+  font-weight: 800 !important;
+  color: #475569 !important;
+}
+
+.tripInlineStrong {
+  margin-right: 5px !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+}
+
+.tripInlineText {
+  color: #475569 !important;
+}
+
+/* ===== PRICE / STATUS ===== */
+.priceCard,
+.noticeCard {
+  margin-top: 6px !important;
+  padding: 8px 10px !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
+}
+
+.priceCard {
+  border: 1px solid #dbeafe !important;
+  background: #f8fbff !important;
+}
+
+.noticeCard {
+  border: 1px solid #e2e8f0 !important;
+  background: #f8fafc !important;
+}
+
+.warningCard {
+  border-color: #fde68a !important;
+  background: #fffbeb !important;
+}
+
+.sectionTitle {
+  margin: 0 !important;
+  font-size: 11.4px !important;
+  line-height: 1.08 !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+}
+
+.priceList {
+  margin-top: 4px !important;
+  display: grid !important;
+  gap: 2px !important;
+}
+
+.priceRow {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: flex-start !important;
+  gap: 8px !important;
+  padding: 3px 0 !important;
+  border-bottom: 1px dashed #cbd5e1 !important;
+}
+
+.priceRow:last-child {
+  border-bottom: none !important;
+  padding-bottom: 0 !important;
+}
+
+.priceType {
+  font-size: 10.5px !important;
+  line-height: 1.1 !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+}
+
+.priceQty {
+  font-size: 8.6px !important;
+  color: #64748b !important;
+  font-weight: 600 !important;
+}
+
+.priceValue {
+  font-size: 11.4px !important;
+  line-height: 1.1 !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+  white-space: nowrap !important;
+  text-align: right !important;
+}
+
+.metaGrid {
+  margin-top: 6px !important;
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 6px !important;
+}
+
+/* ===== TERMS + WARNING: SIDE BY SIDE AND JUSTIFIED ===== */
+.termsCard,
+.warningCard {
+  margin-top: 6px !important;
+  box-sizing: border-box !important;
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
+}
+
+.termsCard {
+  float: left !important;
+  clear: left !important;
+  width: 67.2% !important;
+  margin-right: 1.8% !important;
+}
+
+.warningCard {
+  float: left !important;
+  width: 31% !important;
+}
+
+.noticeText {
+  margin-top: 4px !important;
+  font-size: 10px !important;
+  line-height: 1.3 !important;
+  color: #111827 !important;
+  text-align: justify !important;
+  text-justify: inter-word !important;
+  hyphens: auto !important;
+  -webkit-hyphens: auto !important;
+  word-break: normal !important;
+  overflow-wrap: break-word !important;
+}
+
+.warningCard .noticeText {
+  font-size: 10px !important;
+  line-height: 1.3 !important;
+  text-align: justify !important;
+  text-justify: inter-word !important;
+}
+
+img {
+  max-width: 100% !important;
+}
+
+* {
+  box-shadow: none !important;
+}
+
+.routeCard,
+.priceCard,
+.metaGrid,
+.noticeCard,
+.ticketHeaderWrap {
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
+}
+
+
+.ticketMainCard::after {
+  content: "" !important;
+  display: block !important;
+  clear: both !important;
+}
+
+"""
+
+
+
+def _request_origin(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}"
+
+
+def _playwright_cookies_from_request(request: Request) -> list[dict]:
+    origin = _request_origin(request)
+    cookies = []
+
+    for name, value in request.cookies.items():
+        cookies.append({
+            "name": name,
+            "value": value,
+            "url": origin,
+        })
+
+    return cookies
+
+
+@app.get("/portal/ticket/pdf")
+def portal_ticket_pdf(request: Request, db: Session = Depends(get_db)):
+    booking, redirect_resp = _portal_booking_or_redirect(request, db)
+    if redirect_resp:
+        return redirect_resp
+
+    if not _can_portal_view_ticket(booking):
+        return RedirectResponse(url="/portal?cash_err=ticket", status_code=303)
+
+    origin = _request_origin(request)
+    ticket_url = f"{origin}/portal/ticket?pdf=1"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={"width": 1600, "height": 2200},
+            device_scale_factor=1,
+        )
+
+        cookies = _playwright_cookies_from_request(request)
+        if cookies:
+            context.add_cookies(cookies)
+
+        page = context.new_page()
+        page.goto(ticket_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_load_state("networkidle")
+
+        # Важното: пазим screen layout, защото HTML вече е правилно подреден
+        page.emulate_media(media="screen")
+
+        # Само PDF-компресия, без да чупим структурата
+        page.add_style_tag(content=PDF_TICKET_ONE_PAGE_CSS)
+        page.wait_for_timeout(600)
+
+        pdf_bytes = page.pdf(
+            format="A4",
+            print_background=True,
+            prefer_css_page_size=True,
+            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
+            scale=1.0,
+        )
+
+        context.close()
+        browser.close()
+
+    filename = f"ticket-{booking.external_id}.pdf"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    }
+    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
+
+
 
 def _build_qr_svg_bytes(qr_text: str, size: int = 220) -> bytes:
     qr = QrCodeWidget(qr_text)
@@ -289,21 +783,6 @@ def admin_assign_passenger_seat(
         raise HTTPException(status_code=400, detail="Invalid seat number")
 
     trip_id = getattr(passenger, "trip_id", None)
-
-    if not trip_id and getattr(passenger, "booking_id", None):
-        booking = (
-            db.query(Booking)
-            .filter(Booking.id == passenger.booking_id)
-            .first()
-        )
-
-        if booking:
-            trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
-
-            if trip_id:
-                passenger.trip_id = trip_id
-                db.flush()
-
     if not trip_id:
         raise HTTPException(status_code=400, detail="Passenger has no trip")
 
@@ -315,22 +794,14 @@ def admin_assign_passenger_seat(
     )
 
     for other in others:
-        other_effective_seat = str(
-            getattr(other, "manual_seat_no", None)
-            or getattr(other, "seat_no", None)
-            or ""
-        ).strip()
-
+        other_effective_seat = (
+            str(getattr(other, "manual_seat_no", None) or getattr(other, "seat_no", None) or "").strip()
+        )
         if other_effective_seat == seat_no:
             raise HTTPException(status_code=409, detail="Seat already taken")
 
-    if hasattr(passenger, "manual_seat_no"):
-        passenger.manual_seat_no = seat_no
-    else:
-        passenger.seat_no = seat_no
-
-    if hasattr(passenger, "seat_locked_by_admin"):
-        passenger.seat_locked_by_admin = True
+    passenger.manual_seat_no = seat_no
+    passenger.seat_locked_by_admin = True
 
     db.commit()
 
@@ -1167,6 +1638,70 @@ def _portal_cancellation_policy(booking: Booking, db: Session) -> dict:
     }
 
 
+
+@app.post("/portal/cancel-booking")
+def portal_cancel_booking(
+    request: Request,
+    reason: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    booking, redirect_resp = _portal_booking_or_redirect(request, db)
+    if redirect_resp:
+        return redirect_resp
+
+    if getattr(booking, "booking_status", None) in {"cancelled", "cancellation_requested"}:
+        return RedirectResponse(url="/portal?cancel_err=exists", status_code=303)
+
+    policy = _portal_cancellation_policy(booking, db)
+    if not policy["allowed"]:
+        return RedirectResponse(url="/portal?cancel_err=late", status_code=303)
+
+    existing = (
+        db.query(BookingCancellation)
+        .filter(BookingCancellation.booking_id == booking.id)
+        .filter(BookingCancellation.admin_status.in_(["pending", "approved", "processed"]))
+        .first()
+    )
+    if existing:
+        return RedirectResponse(url="/portal?cancel_err=exists", status_code=303)
+
+    cancellation = BookingCancellation(
+        booking_id=booking.id,
+        external_id=getattr(booking, "external_id", None),
+        requested_at=datetime.utcnow(),
+        travel_at=policy["departure_at"],
+        hours_before_departure=round(policy["hours_left"], 2) if policy["hours_left"] is not None else None,
+        refund_percent=policy["refund_percent"],
+        refund_amount=policy["refund_amount"],
+        currency=policy["currency"],
+        reason=(reason or "").strip() or None,
+        admin_status="pending",
+    )
+    db.add(cancellation)
+
+    booking.booking_status = "cancellation_requested"
+
+    db.commit()
+
+    try:
+        from app.services.mail_sender import send_booking_cancellation_email
+
+        send_booking_cancellation_email(
+            to_email=(booking.email or "").strip(),
+            passenger_name=f"{booking.first_name or ''} {booking.last_name or ''}".strip(),
+            external_id=str(booking.external_id or ""),
+            refund_percent=policy["refund_percent"],
+            refund_amount=policy["refund_amount"],
+            currency=policy["currency"],
+            departure_at=policy["departure_at"],
+        )
+
+        cancellation.passenger_email_sent = True
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return RedirectResponse(url="/portal?cancel_ok=1", status_code=303)
 
 
 @app.get("/portal/cancellation", response_class=HTMLResponse)
@@ -3995,34 +4530,6 @@ def portal_ticket_pdf(request: Request, db: Session = Depends(get_db)):
     selected_seat = _booking_selected_seat(booking)
     qr_available = _ticket_qr_available(booking)
 
-    trip = None
-    if getattr(booking, "trip_id", None):
-        trip = db.query(Trip).filter(Trip.id == booking.trip_id).first()
-
-    passenger = None
-    passengers = (
-        db.query(TripPassenger)
-        .filter(TripPassenger.booking_id == booking.id)
-        .order_by(TripPassenger.id.asc())
-        .all()
-    )
-
-    if passengers and selected_seat:
-        seat_norm = str(selected_seat or "").strip()
-
-        for p in passengers:
-            p_seat = (
-                getattr(p, "manual_seat_no", None)
-                or getattr(p, "seat_no", None)
-                or getattr(p, "effective_seat_no", None)
-            )
-            if str(p_seat or "").strip() == seat_norm:
-                passenger = p
-                break
-
-        if passenger is None:
-            passenger = passengers[0]
-
     stop_points = _booking_stop_points(booking)
     departure_stop = stop_points.get("departure", {}) or {}
     arrival_stop = stop_points.get("arrival", {}) or {}
@@ -4195,6 +4702,19 @@ def portal_ticket_pdf(request: Request, db: Session = Depends(get_db)):
     return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
 
+
+@app.get("/drivers/scan", response_class=HTMLResponse)
+def drivers_scan_page(request: Request):
+    _ensure_driver(request)
+
+    return templates.TemplateResponse(
+        request,
+        "drivers_scan.html",
+        {
+            "result": None,
+            "payload_text": "",
+        },
+    )
 
 
 @app.get("/drivers/scan", response_class=HTMLResponse)
@@ -4753,26 +5273,6 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
     )
 
     booking_ids = [int(b.id) for b in all_bookings if getattr(b, "id", None) is not None]
-    trip_passengers_by_booking_id: dict[int, list[TripPassenger]] = {}
-
-    if booking_ids:
-        booking_linked_passengers = (
-            db.query(TripPassenger)
-            .filter(TripPassenger.booking_id.in_(booking_ids))
-            .all()
-        )
-
-        for p in booking_linked_passengers:
-            bid = getattr(p, "booking_id", None)
-            if bid is None:
-                continue
-            trip_passengers_by_booking_id.setdefault(int(bid), []).append(p)
-
-        for bid in list(trip_passengers_by_booking_id.keys()):
-            trip_passengers_by_booking_id[bid] = sorted(
-                trip_passengers_by_booking_id[bid],
-                key=_trip_passenger_sort_key,
-            )
 
     proof_count_map: dict[int, int] = {}
     final_seats_map: dict[int, list[str]] = {}
@@ -5080,31 +5580,6 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
                     if pid:
                         seen_passenger_ids.add(pid)
                     trip_passengers.append(p)
-                    seat_no = _effective_trip_passenger_seat(p)
-                    if seat_no:
-                        taken_seats_union.add(seat_no)
-
-            # Добавяме и всички TripPassenger rows, които са вързани към booking_id,
-            # дори ако trip_id липсва или не е попаднал в trip_passengers_by_trip_id.
-            for booking in bucket.get("items", []) or []:
-                bid = int(getattr(booking, "id", 0) or 0)
-                if not bid:
-                    continue
-
-                for p in trip_passengers_by_booking_id.get(bid, []):
-                    pid = int(getattr(p, "id", 0) or 0)
-                    if pid and pid in seen_passenger_ids:
-                        continue
-
-                    if pid:
-                        seen_passenger_ids.add(pid)
-
-                    # Само за display payload. Не е задължително да commit-ваме тук.
-                    if not getattr(p, "trip_id", None) and getattr(booking, "trip_id", None):
-                        p.trip_id = booking.trip_id
-
-                    trip_passengers.append(p)
-
                     seat_no = _effective_trip_passenger_seat(p)
                     if seat_no:
                         taken_seats_union.add(seat_no)
