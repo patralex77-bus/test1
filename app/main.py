@@ -2445,6 +2445,64 @@ def _booking_service_key(db_or_booking, booking: Booking | None = None):
     return (date_key, direction_code)
 
 
+def _booking_date_key_for_seats(booking: Booking | None) -> str:
+    if not booking:
+        return ""
+
+    booking_date = getattr(booking, "booking_date", None)
+    if not booking_date:
+        return ""
+
+    try:
+        if isinstance(booking_date, datetime):
+            return booking_date.date().isoformat()
+        if isinstance(booking_date, date):
+            return booking_date.isoformat()
+        return datetime.fromisoformat(str(booking_date)).date().isoformat()
+    except Exception:
+        return str(booking_date).strip()
+
+
+def _booking_route_keys_for_seats(booking: Booking | None) -> set[tuple[str, str]]:
+    """
+    Връща възможните route/service keys за booking-а.
+
+    Причина:
+    При едни booking-и маршрутът е в route_from/route_to,
+    при други в bus_from/bus_to.
+    За seat map трябва да хващаме и двата варианта.
+    """
+    if not booking:
+        return set()
+
+    pairs = [
+        (
+            getattr(booking, "route_from", None),
+            getattr(booking, "route_to", None),
+        ),
+        (
+            getattr(booking, "bus_from", None),
+            getattr(booking, "bus_to", None),
+        ),
+    ]
+
+    out: set[tuple[str, str]] = set()
+
+    for a, b in pairs:
+        a_key = _norm_stop_key(a) or _norm_service_part(a)
+        b_key = _norm_stop_key(b) or _norm_service_part(b)
+
+        if a_key and b_key:
+            out.add((a_key, b_key))
+
+    # fallback по direction code, когато конкретните имена са различно записани
+    direction_code = _booking_direction_code(booking)
+    if direction_code in {"IK", "KI"}:
+        out.add(("direction", direction_code))
+
+    return out
+
+
 def _service_taken_seats(
     db: Session,
     booking: Booking,
@@ -2453,15 +2511,13 @@ def _service_taken_seats(
     """
     Взима всички заети места за същия service/trip.
 
-    Комбинира:
-      1) BookingSeat final seats
-      2) TripPassenger effective seats: manual_seat_no / seat_no
-
-    Важно:
-      - Не разчитаме само на TripPassenger.trip_id.
-      - Добавяме и TripPassenger rows по booking_id за всички bookings
-        от същия service/trip.
-      - Така portal Seat Map вижда местата, сменени от admin dashboard.
+    Тази версия е по-агресивна и надеждна:
+      1) гледа BookingSeat final seats
+      2) гледа TripPassenger manual_seat_no / seat_no
+      3) събира booking-и по trip_id
+      4) събира booking-и по booking_date + route_from/route_to
+      5) събира booking-и по booking_date + bus_from/bus_to
+      6) не зависи само от trip_id, защото много booking-и може още да не са linked
     """
     if not booking:
         return set()
@@ -2473,7 +2529,7 @@ def _service_taken_seats(
     current_external_id = _booking_external_id_key(booking)
 
     # -------------------------------------------------------
-    # Resolve current trip/service
+    # Resolve trip/service на текущия booking
     # -------------------------------------------------------
     resolved_trip_id = getattr(booking, "trip_id", None)
 
@@ -2486,13 +2542,12 @@ def _service_taken_seats(
         except Exception:
             resolved_trip_id = getattr(booking, "trip_id", None)
 
-    service_key = _booking_service_key(db, booking)
-    if not service_key:
+    current_date_key = _booking_date_key_for_seats(booking)
+    current_route_keys = _booking_route_keys_for_seats(booking)
+
+    if not resolved_trip_id and not current_date_key and not current_route_keys:
         return set()
 
-    # -------------------------------------------------------
-    # Helper: дали booking е текущият excluded booking
-    # -------------------------------------------------------
     def _is_excluded_booking_id(value) -> bool:
         if exclude_booking_id is None or value is None:
             return False
@@ -2501,61 +2556,65 @@ def _service_taken_seats(
         except Exception:
             return False
 
+    def _booking_matches_current_service(other: Booking | None) -> bool:
+        if not other:
+            return False
+
+        other_id = getattr(other, "id", None)
+
+        if _is_excluded_booking_id(other_id):
+            return False
+
+        # 1) direct trip match
+        other_trip_id = getattr(other, "trip_id", None)
+        if resolved_trip_id and other_trip_id:
+            try:
+                if int(other_trip_id) == int(resolved_trip_id):
+                    return True
+            except Exception:
+                pass
+
+        # 2) date + route/bus match
+        other_date_key = _booking_date_key_for_seats(other)
+        if current_date_key and other_date_key and current_date_key == other_date_key:
+            other_route_keys = _booking_route_keys_for_seats(other)
+            if current_route_keys and other_route_keys and current_route_keys.intersection(other_route_keys):
+                return True
+
+        return False
+
     # -------------------------------------------------------
-    # 1) Намери всички booking-и от същия service/trip
+    # 1) Събираме всички booking_id за същия service
     # -------------------------------------------------------
     same_service_booking_ids: set[int] = set()
 
     if current_booking_id_int:
         same_service_booking_ids.add(current_booking_id_int)
 
-    # 1.1. Booking-и със същия trip_id
+    # 1.1 booking-и със същия trip_id
     if resolved_trip_id:
-        try:
-            rows = (
-                db.query(Booking.id)
-                .filter(Booking.trip_id == resolved_trip_id)
-                .all()
-            )
+        rows = (
+            db.query(Booking)
+            .filter(Booking.trip_id == resolved_trip_id)
+            .all()
+        )
 
-            for (bid,) in rows:
-                if bid is not None:
-                    same_service_booking_ids.add(int(bid))
-        except Exception:
-            pass
+        for b in rows:
+            bid = getattr(b, "id", None)
+            if bid is not None and not _is_excluded_booking_id(bid):
+                same_service_booking_ids.add(int(bid))
 
-    # 1.2. Booking-и със същия service_key, дори ако trip_id липсва
-    # Ограничаваме по booking_date, за да не сканираме излишно много.
-    booking_date = getattr(booking, "booking_date", None)
+    # 1.2 booking-и със същата дата + route/bus/direction
+    if current_date_key:
+        all_same_date_bookings = db.query(Booking).all()
 
-    try:
-        q = db.query(Booking)
-
-        if booking_date:
-            if isinstance(booking_date, datetime):
-                booking_date_cmp = booking_date.date()
-            else:
-                booking_date_cmp = booking_date
-
-            q = q.filter(Booking.booking_date == booking_date_cmp)
-
-        candidate_bookings = q.all()
-
-        for other_booking in candidate_bookings:
-            other_id = getattr(other_booking, "id", None)
-            if other_id is None:
+        for b in all_same_date_bookings:
+            bid = getattr(b, "id", None)
+            if bid is None:
                 continue
 
-            try:
-                other_key = _booking_service_key(db, other_booking)
-            except Exception:
-                other_key = None
-
-            if other_key == service_key:
-                same_service_booking_ids.add(int(other_id))
-
-    except Exception:
-        pass
+            if _booking_matches_current_service(b):
+                same_service_booking_ids.add(int(bid))
 
     # -------------------------------------------------------
     # 2) BookingSeat final seats
@@ -2578,7 +2637,7 @@ def _service_taken_seats(
 
         include_row = False
 
-        # 2.1. Същият trip_id директно в BookingSeat
+        # direct trip match на самия BookingSeat
         seat_trip_id = getattr(seat_row, "trip_id", None)
         if resolved_trip_id and seat_trip_id:
             try:
@@ -2587,7 +2646,7 @@ def _service_taken_seats(
             except Exception:
                 pass
 
-        # 2.2. BookingSeat booking_id е сред booking-ите за същия service
+        # booking_id match
         if not include_row and other_booking_id is not None:
             try:
                 if int(other_booking_id) in same_service_booking_ids:
@@ -2595,15 +2654,9 @@ def _service_taken_seats(
             except Exception:
                 pass
 
-        # 2.3. Fallback чрез service_key
-        if not include_row:
-            try:
-                other_key = _booking_service_key(db, other_booking)
-            except Exception:
-                other_key = None
-
-            if other_key == service_key:
-                include_row = True
+        # fallback date + route/bus match
+        if not include_row and _booking_matches_current_service(other_booking):
+            include_row = True
 
         if not include_row:
             continue
@@ -2613,7 +2666,7 @@ def _service_taken_seats(
             taken.add(seat_no)
 
     # -------------------------------------------------------
-    # 3) TripPassenger seats от admin/manual dashboard
+    # 3) TripPassenger seats: manual_seat_no / seat_no
     # -------------------------------------------------------
     passenger_rows: list[TripPassenger] = []
 
@@ -2631,77 +2684,47 @@ def _service_taken_seats(
             .filter(or_(*passenger_filters))
             .all()
         )
-    else:
-        passenger_rows = []
 
     # -------------------------------------------------------
-    # 4) Добавяме и fallback unlinked rows чрез external_id
+    # 4) Fallback: unlinked passenger rows със същия external_id
     # -------------------------------------------------------
-    # Това покрива случаи, при които TripPassenger няма booking_id,
-    # но source_uid / voucher съдържа external_id на booking от същия service.
-    service_booking_external_ids: set[str] = set()
+    service_external_ids: set[str] = set()
 
     if same_service_booking_ids:
-        try:
-            service_bookings = (
-                db.query(Booking)
-                .filter(Booking.id.in_(list(same_service_booking_ids)))
-                .all()
-            )
+        service_bookings = (
+            db.query(Booking)
+            .filter(Booking.id.in_(list(same_service_booking_ids)))
+            .all()
+        )
 
-            for b in service_bookings:
-                ext = _booking_external_id_key(b)
-                if ext:
-                    service_booking_external_ids.add(ext)
-        except Exception:
-            pass
+        for b in service_bookings:
+            ext = _booking_external_id_key(b)
+            if ext:
+                service_external_ids.add(ext)
 
-    if service_booking_external_ids:
-        try:
-            extra_candidates = []
+    if service_external_ids:
+        existing_passenger_ids = {
+            int(getattr(p, "id", 0) or 0)
+            for p in passenger_rows
+        }
 
-            if resolved_trip_id:
-                extra_candidates = (
-                    db.query(TripPassenger)
-                    .filter(
-                        or_(
-                            TripPassenger.trip_id == resolved_trip_id,
-                            TripPassenger.booking_id.is_(None),
-                        )
-                    )
-                    .all()
-                )
-            else:
-                extra_candidates = (
-                    db.query(TripPassenger)
-                    .filter(TripPassenger.booking_id.is_(None))
-                    .all()
-                )
+        # Тук нарочно не ограничаваме само по trip_id,
+        # защото част от Excel/import rows може да са без booking_id/trip_id,
+        # но да имат external_id във voucher/source_uid.
+        extra_candidates = db.query(TripPassenger).all()
 
-            existing_ids = {
-                int(getattr(p, "id", 0) or 0)
-                for p in passenger_rows
-            }
+        for p in extra_candidates:
+            pid = int(getattr(p, "id", 0) or 0)
+            if pid in existing_passenger_ids:
+                continue
 
-            for p in extra_candidates:
-                pid = int(getattr(p, "id", 0) or 0)
-                if pid in existing_ids:
-                    continue
-
-                try:
-                    p_ext = _trip_passenger_external_id_key(p, booking_by_id={})
-                except Exception:
-                    p_ext = None
-
-                if p_ext and str(p_ext).strip() in service_booking_external_ids:
-                    passenger_rows.append(p)
-                    existing_ids.add(pid)
-
-        except Exception:
-            pass
+            p_ext = _trip_passenger_external_id_key(p, booking_by_id={})
+            if p_ext and str(p_ext).strip() in service_external_ids:
+                passenger_rows.append(p)
+                existing_passenger_ids.add(pid)
 
     # -------------------------------------------------------
-    # 5) Map booking_id -> Booking за external_id проверките
+    # 5) booking_id -> Booking map за external_id проверките
     # -------------------------------------------------------
     passenger_booking_ids = {
         int(getattr(p, "booking_id"))
@@ -2720,7 +2743,7 @@ def _service_taken_seats(
         passenger_booking_by_id = {int(b.id): b for b in passenger_bookings}
 
     # -------------------------------------------------------
-    # 6) Добавяме TripPassenger effective seats
+    # 6) Добавяме effective passenger seats
     # -------------------------------------------------------
     for p in passenger_rows:
         p_booking_id = getattr(p, "booking_id", None)
@@ -2728,8 +2751,7 @@ def _service_taken_seats(
         if _is_excluded_booking_id(p_booking_id):
             continue
 
-        # Ако това е unlinked TripPassenger за същия current booking,
-        # не трябва да блокира собственото място на клиента.
+        # Ако това е unlinked row за текущия booking, не го броим като чуждо заето място.
         if exclude_booking_id is not None and current_external_id:
             try:
                 p_external_id = _trip_passenger_external_id_key(
@@ -2749,6 +2771,8 @@ def _service_taken_seats(
             taken.add(seat_no)
 
     return taken
+
+
 
 def _ensure_booking_has_service(db_or_booking, booking: Booking | None = None) -> bool:
     """
