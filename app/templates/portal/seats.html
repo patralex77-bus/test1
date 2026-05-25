@@ -325,6 +325,14 @@
   let selectedSeats = normalizeSeatList({{ selected_seats | tojson }});
   let takenSeats = normalizeSeatList({{ taken_seats | list | tojson }});
 
+  /*
+    ВАЖНО:
+    selectionDirty = false означава, че клиентът още не е пипал избора.
+    Тогава при refresh приемаме server selected_seats.
+    Ако клиентът вече избира ръчно, не му презаписваме избора на всеки 15 сек.
+  */
+  let selectionDirty = false;
+
   const seatButtons = Array.from(document.querySelectorAll(".seat-btn"));
   const selectedSeatsWrap = document.getElementById("selectedSeatsWrap");
   const seatInputs = document.getElementById("seatInputs");
@@ -386,18 +394,18 @@
 
     seatButtons.forEach((btn) => {
       const seat = normalizeSeatValue(btn.dataset.seat || "");
+
       btn.classList.remove("taken", "selected");
-
-      if (taken.has(seat) && !selected.has(seat)) {
-        btn.classList.add("taken");
-        btn.disabled = true;
-        return;
-      }
-
       btn.disabled = false;
 
       if (selected.has(seat)) {
         btn.classList.add("selected");
+        return;
+      }
+
+      if (taken.has(seat)) {
+        btn.classList.add("taken");
+        btn.disabled = true;
       }
     });
   }
@@ -421,6 +429,8 @@
       return;
     }
 
+    selectionDirty = true;
+
     if (selected.has(seatStr)) {
       selectedSeats = selectedSeats.filter(x => normalizeSeatValue(x) !== seatStr);
       rerender();
@@ -436,15 +446,25 @@
     rerender();
   }
 
-  async function refreshAvailability() {
-    hideInfo();
-    refreshBtn.disabled = true;
-    refreshBtn.textContent = I18N.refreshing;
+  async function refreshAvailability(options = {}) {
+    const silent = Boolean(options.silent);
+
+    if (!silent) {
+      hideInfo();
+    }
+
+    if (refreshBtn && !silent) {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = I18N.refreshing;
+    }
 
     try {
-      const res = await fetch("/portal/seats/state", {
+      const res = await fetch("/portal/seats/state?_=" + Date.now(), {
         credentials: "same-origin",
-        cache: "no-store"
+        cache: "no-store",
+        headers: {
+          "Cache-Control": "no-cache"
+        }
       });
 
       const data = await res.json();
@@ -454,23 +474,61 @@
       }
 
       const oldSelected = normalizeSeatList(selectedSeats);
-      takenSeats = normalizeSeatList(data.taken_seats || []);
+      const serverSelected = normalizeSeatList(data.selected_seats || []);
+      const serverTaken = normalizeSeatList(data.taken_seats || []);
+
+      takenSeats = serverTaken;
 
       const taken = new Set(takenSeats);
-      selectedSeats = oldSelected.filter(seat => !taken.has(seat));
+      const serverSelectedSet = new Set(serverSelected);
+
+      if (!selectionDirty) {
+        /*
+          Ключова корекция:
+          Ако админ е сменил/назначил място, приемаме selected_seats от backend-а.
+        */
+        selectedSeats = serverSelected;
+      } else {
+        /*
+          Ако клиентът вече избира ръчно, пазим локалния избор,
+          но махаме места, които междувременно са станали заети от други.
+          Ако мястото е serverSelected за текущия booking, не го махаме.
+        */
+        selectedSeats = oldSelected.filter(seat => {
+          return !taken.has(seat) || serverSelectedSet.has(seat);
+        });
+      }
 
       rerender();
 
-      if (oldSelected.length !== selectedSeats.length) {
-        showInfo(I18N.removedUnavailable, "error");
-      } else {
-        showInfo(I18N.refreshedOk, "success");
+      if (!silent) {
+        if (oldSelected.length !== selectedSeats.length) {
+          showInfo(I18N.removedUnavailable, "error");
+        } else {
+          showInfo(I18N.refreshedOk, "success");
+        }
       }
+
+      // Debug в browser console:
+      console.log("[SeatMap state]", {
+        takenSeats,
+        selectedSeats,
+        serverSelected,
+        serverTaken,
+        selectionDirty
+      });
+
     } catch (err) {
-      showInfo(I18N.refreshFailedPrefix + (err.message || err), "error");
+      if (!silent) {
+        showInfo(I18N.refreshFailedPrefix + (err.message || err), "error");
+      }
+
+      console.error("[SeatMap refresh failed]", err);
     } finally {
-      refreshBtn.disabled = false;
-      refreshBtn.textContent = I18N.refreshDefault;
+      if (refreshBtn && !silent) {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = I18N.refreshDefault;
+      }
     }
   }
 
@@ -483,27 +541,41 @@
   resetBtn.addEventListener("click", function (event) {
     event.preventDefault();
     hideInfo();
+
+    selectionDirty = true;
     selectedSeats = [];
+
     rerender();
     showInfo(I18N.selectionCleared, "success");
   });
 
   refreshBtn.addEventListener("click", function (event) {
     event.preventDefault();
-    refreshAvailability();
+
+    /*
+      При ръчен Refresh приемаме, че клиентът иска актуално състояние от backend-а.
+      Затова временно махаме dirty flag и позволяваме selected_seats от server да се приложи.
+    */
+    selectionDirty = false;
+    refreshAvailability({ silent: false });
   });
 
   rerender();
 
-  // Автоматично обновяване, ако админът междувременно е назначил/сменил място.
-  // Така пътникът няма нужда винаги да натиска Refresh.
+  /*
+    ВАЖНО:
+    Правим refresh веднага при зареждане.
+    Предишният код чакаше 15 секунди и не прилагаше data.selected_seats.
+  */
+  refreshAvailability({ silent: true });
+
   setInterval(() => {
-    refreshAvailability();
+    refreshAvailability({ silent: true });
   }, 15000);
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-      refreshAvailability();
+      refreshAvailability({ silent: true });
     }
   });
 })();
