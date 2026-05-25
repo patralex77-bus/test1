@@ -1583,33 +1583,84 @@ def _norm_stop_key(value: str | None) -> str:
     if not value:
         return ""
 
-    s = str(value).strip().lower()
-    s = re.sub(r"\s+", " ", s)
+    def _clean(v: str) -> str:
+        x = str(v or "").strip().lower()
+        x = re.sub(r"\s+", " ", x)
+
+        # Unicode / keyboard variants
+        x = (
+            x.replace("ї", "і")
+             .replace("ï", "i")
+             .replace("ı", "i")
+             .replace("`", "'")
+             .replace("’", "'")
+        )
+
+        return x
+
+    s = _clean(value)
 
     aliases = {
-        "kyiv": ["kyiv", "kiev", "київ", "киев"],
-        "zhytomyr": ["zhytomyr", "zhitomir", "житомир"],
-        "rivne": ["rivne", "rovno", "рівне", "ривне", "ровно"],
-        "lviv": ["lviv", "lvov", "львів", "львов"],
+        "kyiv": [
+            "kyiv", "kiev",
+            "київ", "киів", "киив", "киев", "киiв", "киïв",
+        ],
+        "zhytomyr": [
+            "zhytomyr", "zhitomir", "житомир",
+        ],
+        "rivne": [
+            "rivne", "rovno", "рівне", "рiвне", "ривне", "ровно",
+        ],
+        "lviv": [
+            "lviv", "lvov", "львів", "львiв", "львов",
+        ],
 
-        "wien": ["wien", "vienna", "відень", "вiдень", "видень"],
-        "stpolten": ["st. pölten", "st pölten", "st.polten", "st polten", "sankt polten", "ст. пьоелтен", "ст пьоелтен"],
-        "linz": ["linz", "лінц", "линц"],
-        "wels": ["wels", "вельс"],
-        "salzburg": ["salzburg", "salzburg sud", "sud", "p&r süd salzburg", "зальцбург"],
-        "innsbruck": ["innsbruck", "інсбрук", "инсбрук"],
-        "bruck": ["bruck", "bruck an der mur", "брук", "брук ан дер мур"],
-        "graz": ["graz", "грац"],
-        "klagenfurt": ["klagenfurt", "клагенфурт"],
-        "villach": ["villach", "філлах", "филлах"],
+        "wien": [
+            "wien", "vienna",
+            "відень", "вiдень", "видень", "віден", "wien hbf",
+        ],
+        "stpolten": [
+            "st. pölten", "st pölten", "st.polten", "st polten",
+            "st. poelten", "st poelten", "sankt polten",
+            "ст. пьоелтен", "ст пьоелтен",
+        ],
+        "linz": [
+            "linz", "лінц", "лiнц", "линц",
+        ],
+        "wels": [
+            "wels", "вельс",
+        ],
+        "salzburg": [
+            "salzburg", "salzburg sud", "salzburg süd",
+            "sud", "süd", "p&r süd salzburg", "p+r süd salzburg",
+            "зальцбург",
+        ],
+        "innsbruck": [
+            "innsbruck",
+            "інсбрук", "iнсбрук", "инсбрук", "iнсбрук",
+        ],
+        "bruck": [
+            "bruck", "bruck an der mur", "брук", "брук ан дер мур",
+        ],
+        "graz": [
+            "graz", "грац",
+        ],
+        "klagenfurt": [
+            "klagenfurt", "клагенфурт",
+        ],
+        "villach": [
+            "villach", "філлах", "фiллах", "филлах",
+        ],
     }
 
     for key, variants in aliases.items():
-        for v in variants:
-            if s == v or v in s:
+        for variant in variants:
+            vv = _clean(variant)
+            if s == vv or vv in s:
                 return key
 
     return s
+
 
 def _stop_meta(value: str | None) -> dict:
     key = _norm_stop_key(value)
@@ -2325,18 +2376,25 @@ def _sync_admin_passenger_seat_to_booking_seat(
 
 def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
     """
-    Осигурява booking.trip_id.
+    Намира Trip за booking.
 
-    Логика:
-    1. ако booking.trip_id вече е наличен -> връща го
-    2. ако няма -> пробва rematch service
-    3. ако още няма -> пробва да вземе trip_id от linked TripPassenger
-    4. ако още няма -> пробва директен match по route + booking_date
+    Най-важно:
+    Seat Map трябва да се връзва по реалния автобус:
+      booking.booking_date + booking.bus_from + booking.bus_to
+
+    route_from/route_to може да е само клиентски сегмент:
+      Київ -> Відень
+
+    bus_from/bus_to е реалният service:
+      Київ -> Iнсбрук
     """
-    if booking.trip_id:
+    if not booking:
+        return None
+
+    if getattr(booking, "trip_id", None):
         return booking.trip_id
 
-    # 1) service rematch
+    # 1) пробваме official matcher
     try:
         rematch_booking_to_trip(db, booking.id)
         db.flush()
@@ -2344,10 +2402,10 @@ def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
     except Exception:
         pass
 
-    if booking.trip_id:
+    if getattr(booking, "trip_id", None):
         return booking.trip_id
 
-    # 2) fallback през linked passengers
+    # 2) fallback през linked TripPassenger
     linked_p = (
         db.query(TripPassenger)
         .filter(
@@ -2363,27 +2421,57 @@ def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
         db.flush()
         return booking.trip_id
 
-    # 3) direct DB fallback: match по route + booking_date
-    route_from = (booking.route_from or "").strip().lower()
-    route_to = (booking.route_to or "").strip().lower()
-    booking_date = booking.booking_date
+    booking_date = getattr(booking, "booking_date", None)
+    if not booking_date:
+        return None
 
-    if route_from and route_to and booking_date:
-        trip = (
-            db.query(Trip)
-            .filter(
-                func.lower(func.coalesce(Trip.route_from, "")) == route_from,
-                func.lower(func.coalesce(Trip.route_to, "")) == route_to,
-                func.date(Trip.date_time) == booking_date,
-            )
-            .order_by(Trip.date_time.asc(), Trip.id.asc())
-            .first()
-        )
+    try:
+        if isinstance(booking_date, datetime):
+            booking_date_only = booking_date.date()
+        else:
+            booking_date_only = booking_date
+    except Exception:
+        return None
 
-        if trip:
-            booking.trip_id = trip.id
-            db.flush()
-            return booking.trip_id
+    day_start = datetime.combine(booking_date_only, time.min)
+    day_end = day_start + timedelta(days=1)
+
+    trips_same_date = (
+        db.query(Trip)
+        .filter(Trip.date_time.isnot(None))
+        .filter(Trip.date_time >= day_start)
+        .filter(Trip.date_time < day_end)
+        .order_by(Trip.date_time.asc(), Trip.id.asc())
+        .all()
+    )
+
+    # 3) най-силен match: bus_from / bus_to
+    booking_bus_from_key = _norm_stop_key(getattr(booking, "bus_from", None))
+    booking_bus_to_key = _norm_stop_key(getattr(booking, "bus_to", None))
+
+    if booking_bus_from_key and booking_bus_to_key:
+        for trip in trips_same_date:
+            trip_from_key = _norm_stop_key(getattr(trip, "route_from", None))
+            trip_to_key = _norm_stop_key(getattr(trip, "route_to", None))
+
+            if trip_from_key == booking_bus_from_key and trip_to_key == booking_bus_to_key:
+                booking.trip_id = trip.id
+                db.flush()
+                return booking.trip_id
+
+    # 4) fallback: route_from / route_to
+    booking_route_from_key = _norm_stop_key(getattr(booking, "route_from", None))
+    booking_route_to_key = _norm_stop_key(getattr(booking, "route_to", None))
+
+    if booking_route_from_key and booking_route_to_key:
+        for trip in trips_same_date:
+            trip_from_key = _norm_stop_key(getattr(trip, "route_from", None))
+            trip_to_key = _norm_stop_key(getattr(trip, "route_to", None))
+
+            if trip_from_key == booking_route_from_key and trip_to_key == booking_route_to_key:
+                booking.trip_id = trip.id
+                db.flush()
+                return booking.trip_id
 
     return None
 
@@ -2445,6 +2533,121 @@ def _booking_service_key(db_or_booking, booking: Booking | None = None):
     return (date_key, direction_code)
 
 
+
+def _service_date_key_from_booking(booking: Booking) -> str | None:
+    booking_date = getattr(booking, "booking_date", None)
+
+    if not booking_date:
+        return None
+
+    try:
+        if isinstance(booking_date, datetime):
+            return booking_date.date().isoformat()
+        if isinstance(booking_date, date):
+            return booking_date.isoformat()
+        return datetime.fromisoformat(str(booking_date)).date().isoformat()
+    except Exception:
+        return str(booking_date).split(" ")[0].strip() or None
+
+
+def _service_stop_key(value: str | None) -> str:
+    """
+    Нормализира stop/service име.
+    ВАЖНО: ползва _norm_stop_key, защото там вече имаме aliases:
+    Київ/Kyiv, Відень/Wien, Iнсбрук/Innsbruck и т.н.
+    """
+    key = _norm_stop_key(value)
+    return (key or "").strip().lower()
+
+
+def _booking_service_candidate_keys(
+    db_or_booking,
+    booking: Booking | None = None,
+) -> set[tuple[str, str]]:
+    """
+    Връща всички възможни service keys за booking.
+
+    Цел:
+    - ако има trip_id -> най-силен key: ("trip", trip_id)
+    - ако няма trip_id -> ползва booking_date + bus_from/bus_to
+    - fallback: booking_date + direction_code
+    - fallback: booking_date + route_from/route_to
+
+    Това оправя portal seat map, когато booking.trip_id е NULL.
+    """
+    if booking is None:
+        db = None
+        booking = db_or_booking
+    else:
+        db = db_or_booking
+
+    keys: set[tuple[str, str]] = set()
+
+    if not booking:
+        return keys
+
+    trip_id = getattr(booking, "trip_id", None)
+
+    if not trip_id and db is not None:
+        try:
+            trip_id = _resolve_booking_trip_id(db, booking)
+            if trip_id:
+                booking.trip_id = trip_id
+                db.flush()
+        except Exception:
+            trip_id = getattr(booking, "trip_id", None)
+
+    if trip_id:
+        keys.add(("trip", str(int(trip_id))))
+
+    date_key = _service_date_key_from_booking(booking)
+    if not date_key:
+        return keys
+
+    bus_from = _service_stop_key(getattr(booking, "bus_from", None))
+    bus_to = _service_stop_key(getattr(booking, "bus_to", None))
+
+    route_from = _service_stop_key(getattr(booking, "route_from", None))
+    route_to = _service_stop_key(getattr(booking, "route_to", None))
+
+    # Най-важният fallback: реалният автобус/service.
+    if bus_from and bus_to:
+        keys.add(("service", f"{date_key}|bus|{bus_from}->{bus_to}"))
+
+    # Стар direction fallback: KI / IK.
+    direction_code = _booking_direction_code(booking)
+    if direction_code and direction_code not in {"OTHER", ""}:
+        keys.add(("service", f"{date_key}|dir|{direction_code}"))
+
+    # Fallback route, ако няма bus fields.
+    if route_from and route_to:
+        keys.add(("service", f"{date_key}|route|{route_from}->{route_to}"))
+
+    return keys
+
+
+def _booking_service_key(db_or_booking, booking: Booking | None = None):
+    """
+    Backward-compatible wrapper.
+    Връща един key, но вече базиран върху candidate keys.
+    """
+    keys = _booking_service_candidate_keys(db_or_booking, booking)
+
+    if not keys:
+        return None
+
+    # trip key е най-силен
+    for key in keys:
+        if key[0] == "trip":
+            return key
+
+    return sorted(keys)[0]
+
+
+def _ensure_booking_has_service(db_or_booking, booking: Booking | None = None) -> bool:
+    return bool(_booking_service_candidate_keys(db_or_booking, booking))
+
+
 def _booking_date_key_for_seats(booking: Booking | None) -> str:
     if not booking:
         return ""
@@ -2503,6 +2706,174 @@ def _booking_route_keys_for_seats(booking: Booking | None) -> set[tuple[str, str
     return out
 
 
+def _portal_service_date_key(db: Session | None, booking: Booking | None) -> str | None:
+    if not booking:
+        return None
+
+    booking_date = getattr(booking, "booking_date", None)
+    if booking_date:
+        try:
+            if isinstance(booking_date, datetime):
+                return booking_date.date().isoformat()
+            if isinstance(booking_date, date):
+                return booking_date.isoformat()
+            return datetime.fromisoformat(str(booking_date)).date().isoformat()
+        except Exception:
+            s = str(booking_date).strip()
+            if s:
+                return s[:10]
+
+    try:
+        dep_dt = _booking_departure_dt_for_dispatch(db, booking)
+        if dep_dt:
+            return dep_dt.date().isoformat()
+    except Exception:
+        pass
+
+    if db is not None and getattr(booking, "trip_id", None):
+        try:
+            trip = db.query(Trip).filter(Trip.id == booking.trip_id).first()
+            if trip and getattr(trip, "date_time", None):
+                return trip.date_time.date().isoformat()
+        except Exception:
+            pass
+
+    return None
+
+
+def _portal_service_stop_key(value: str | None) -> str:
+    key = _norm_stop_key(value)
+    if key:
+        return key
+
+    s = _norm_service_part(value)
+    s = re.sub(r"[^a-zа-яіїєґ0-9]+", "_", s, flags=re.IGNORECASE).strip("_")
+    return s
+
+
+def _portal_booking_service_keys(
+    db_or_booking,
+    booking: Booking | None = None,
+) -> set[tuple]:
+    """
+    Връща всички възможни service keys за booking.
+
+    Цел:
+      - ако има trip_id -> match по trip
+      - ако няма trip_id при други booking-и -> match по дата + route/bus direction
+      - fallback: дата + AT->UA / UA->AT / IK / KI
+
+    Това е ключово за portal Seat Map.
+    """
+    if booking is None:
+        db = None
+        booking = db_or_booking
+    else:
+        db = db_or_booking
+
+    keys: set[tuple] = set()
+
+    if not booking:
+        return keys
+
+    trip = None
+    trip_id = getattr(booking, "trip_id", None)
+
+    if not trip_id and db is not None:
+        try:
+            trip_id = _resolve_booking_trip_id(db, booking)
+            if trip_id:
+                booking.trip_id = trip_id
+        except Exception:
+            trip_id = getattr(booking, "trip_id", None)
+
+    if trip_id:
+        try:
+            keys.add(("trip", str(int(trip_id))))
+        except Exception:
+            keys.add(("trip", str(trip_id)))
+
+        if db is not None:
+            try:
+                trip = db.query(Trip).filter(Trip.id == trip_id).first()
+            except Exception:
+                trip = None
+
+    date_key = _portal_service_date_key(db, booking)
+
+    route_pairs: list[tuple[str | None, str | None]] = [
+        (getattr(booking, "route_from", None), getattr(booking, "route_to", None)),
+        (getattr(booking, "bus_from", None), getattr(booking, "bus_to", None)),
+    ]
+
+    if trip:
+        route_pairs.append((
+            getattr(trip, "route_from", None),
+            getattr(trip, "route_to", None),
+        ))
+
+        if not date_key and getattr(trip, "date_time", None):
+            try:
+                date_key = trip.date_time.date().isoformat()
+            except Exception:
+                pass
+
+    if date_key:
+        for from_value, to_value in route_pairs:
+            from_key = _portal_service_stop_key(from_value)
+            to_key = _portal_service_stop_key(to_value)
+
+            if from_key and to_key:
+                keys.add(("date_route", date_key, from_key, to_key))
+
+                try:
+                    meta = _dashboard_direction_meta_from_values(from_value, to_value)
+                    direction_key = str(meta.get("key") or "").strip()
+                    if direction_key and "unknown" not in direction_key:
+                        keys.add(("date_direction", date_key, direction_key))
+                except Exception:
+                    pass
+
+        try:
+            direction_code = _booking_direction_code(booking)
+            if direction_code and direction_code != "OTHER":
+                keys.add(("date_code", date_key, direction_code))
+        except Exception:
+            pass
+
+    return keys
+
+
+def _portal_service_keys_match(current_keys: set[tuple], other_keys: set[tuple]) -> bool:
+    if not current_keys or not other_keys:
+        return False
+
+    # 1) Най-сигурно: trip/date_route/date_code
+    strong_prefixes = {"trip", "date_route", "date_code"}
+
+    current_strong = {k for k in current_keys if k and k[0] in strong_prefixes}
+    other_strong = {k for k in other_keys if k and k[0] in strong_prefixes}
+
+    if current_strong & other_strong:
+        return True
+
+    # 2) Ако и двете страни имат exact route, но не съвпада — не ги смесваме само по AT->UA.
+    current_has_route = any(k and k[0] == "date_route" for k in current_keys)
+    other_has_route = any(k and k[0] == "date_route" for k in other_keys)
+
+    if current_has_route and other_has_route:
+        return False
+
+    # 3) Fallback: дата + направление, напр. AT->UA / UA->AT.
+    current_direction = {k for k in current_keys if k and k[0] == "date_direction"}
+    other_direction = {k for k in other_keys if k and k[0] == "date_direction"}
+
+    return bool(current_direction & other_direction)
+
+
+def _portal_service_keys_debug(keys: set[tuple]) -> list[str]:
+    return [" | ".join(str(part) for part in key) for key in sorted(keys)]
+
 
 def _service_taken_seats(
     db: Session,
@@ -2510,119 +2881,24 @@ def _service_taken_seats(
     exclude_booking_id: int | None = None,
 ) -> set[str]:
     """
-    Взима всички заети места за същия service/trip.
+    Взима всички заети места за същия автобус/service.
 
-    Връща места от:
-      1) BookingSeat final seats
-      2) TripPassenger manual_seat_no / seat_no
-      3) fallback match по booking.trip_id, booking service key и external_id
+    Ключова корекция:
+    Ако booking.trip_id е NULL, service се определя по:
+      booking_date + bus_from + bus_to
 
-    ВАЖНО:
-    exclude_booking_id изключва текущата резервация, за да може клиентът
-    да вижда своите места като selected, а не като taken.
+    Не по route_from/route_to, защото това е клиентски сегмент,
+    например Київ → Відень, докато автобусът е Київ → Iнсбрук.
     """
     if not booking:
         return set()
 
+    current_keys = _booking_service_candidate_keys(db, booking)
+    if not current_keys:
+        return set()
+
     taken: set[str] = set()
-
-    def _seat_norm(value) -> str:
-        s = str(value or "").strip()
-        if re.fullmatch(r"\d+\.0+", s):
-            s = s.split(".", 1)[0]
-        return s
-
-    def _date_key(value) -> str | None:
-        if not value:
-            return None
-        try:
-            if isinstance(value, datetime):
-                return value.date().isoformat()
-            if isinstance(value, date):
-                return value.isoformat()
-            return datetime.fromisoformat(str(value)).date().isoformat()
-        except Exception:
-            return str(value).strip() or None
-
-    def _booking_fallback_key(b: Booking | None) -> tuple[str | None, str | None]:
-        if not b:
-            return None, None
-
-        b_date = _date_key(getattr(b, "booking_date", None))
-
-        direction = None
-        try:
-            direction = _booking_direction_code(b)
-        except Exception:
-            direction = None
-
-        return b_date, direction
-
-    current_booking_id = int(getattr(booking, "id", 0) or 0)
     current_external_id = _booking_external_id_key(booking)
-
-    resolved_trip_id = getattr(booking, "trip_id", None)
-    if not resolved_trip_id:
-        try:
-            resolved_trip_id = _resolve_booking_trip_id(db, booking)
-            if resolved_trip_id:
-                booking.trip_id = resolved_trip_id
-                db.flush()
-        except Exception:
-            resolved_trip_id = getattr(booking, "trip_id", None)
-
-    try:
-        service_key = _booking_service_key(db, booking)
-    except Exception:
-        service_key = None
-
-    current_date_key, current_direction_key = _booking_fallback_key(booking)
-
-    def _same_service(other_booking: Booking | None, seat_trip_id=None, passenger_trip_id=None) -> bool:
-        if not other_booking:
-            return False
-
-        other_booking_id = int(getattr(other_booking, "id", 0) or 0)
-
-        if exclude_booking_id is not None and other_booking_id == int(exclude_booking_id):
-            return False
-
-        other_trip_id = getattr(other_booking, "trip_id", None)
-
-        # 1) Най-силен match: trip_id
-        if resolved_trip_id:
-            if seat_trip_id and int(seat_trip_id) == int(resolved_trip_id):
-                return True
-
-            if passenger_trip_id and int(passenger_trip_id) == int(resolved_trip_id):
-                return True
-
-            if other_trip_id and int(other_trip_id) == int(resolved_trip_id):
-                return True
-
-        # 2) Service key match
-        if service_key:
-            try:
-                other_key = _booking_service_key(db, other_booking)
-            except Exception:
-                other_key = None
-
-            if other_key and other_key == service_key:
-                return True
-
-        # 3) Fallback: same booking_date + direction
-        other_date_key, other_direction_key = _booking_fallback_key(other_booking)
-        if (
-            current_date_key
-            and other_date_key
-            and current_date_key == other_date_key
-            and current_direction_key
-            and other_direction_key
-            and current_direction_key == other_direction_key
-        ):
-            return True
-
-        return False
 
     # -------------------------------------------------------
     # 1) BookingSeat final seats
@@ -2638,24 +2914,63 @@ def _service_taken_seats(
     )
 
     for seat_row, other_booking in seat_rows:
-        other_booking_id = int(getattr(other_booking, "id", 0) or 0)
+        other_booking_id = getattr(other_booking, "id", None)
 
-        if exclude_booking_id is not None and other_booking_id == int(exclude_booking_id):
+        if (
+            exclude_booking_id is not None
+            and other_booking_id is not None
+            and int(other_booking_id) == int(exclude_booking_id)
+        ):
             continue
 
-        seat_trip_id = getattr(seat_row, "trip_id", None)
-
-        if not _same_service(other_booking, seat_trip_id=seat_trip_id):
+        other_keys = _booking_service_candidate_keys(db, other_booking)
+        if not other_keys:
             continue
 
-        seat_no = _seat_norm(getattr(seat_row, "seat_no", None))
+        if not current_keys.intersection(other_keys):
+            continue
+
+        seat_no = str(getattr(seat_row, "seat_no", "") or "").strip()
         if seat_no:
             taken.add(seat_no)
 
     # -------------------------------------------------------
-    # 2) TripPassenger seats
+    # 2) TripPassenger effective seats: manual_seat_no / seat_no
     # -------------------------------------------------------
-    passenger_rows = db.query(TripPassenger).all()
+    passenger_rows: list[TripPassenger] = []
+
+    # Ако текущият booking има trip_id, първо взимаме по trip_id.
+    resolved_trip_id = getattr(booking, "trip_id", None)
+    if resolved_trip_id:
+        passenger_rows.extend(
+            db.query(TripPassenger)
+            .filter(TripPassenger.trip_id == resolved_trip_id)
+            .all()
+        )
+
+    # Допълнително взимаме passenger rows, вързани към bookings със същия service.
+    linked_rows = (
+        db.query(TripPassenger, Booking)
+        .join(Booking, Booking.id == TripPassenger.booking_id)
+        .all()
+    )
+
+    seen_passenger_ids: set[int] = {
+        int(getattr(p, "id", 0) or 0)
+        for p in passenger_rows
+        if getattr(p, "id", None)
+    }
+
+    for p, b in linked_rows:
+        pid = int(getattr(p, "id", 0) or 0)
+        if pid and pid in seen_passenger_ids:
+            continue
+
+        other_keys = _booking_service_candidate_keys(db, b)
+        if current_keys.intersection(other_keys):
+            passenger_rows.append(p)
+            if pid:
+                seen_passenger_ids.add(pid)
 
     passenger_booking_ids = {
         int(getattr(p, "booking_id"))
@@ -2672,37 +2987,6 @@ def _service_taken_seats(
         )
         passenger_booking_by_id = {int(b.id): b for b in passenger_bookings}
 
-    # За unlinked TripPassenger: опитваме external_id -> Booking
-    external_ids: set[str] = set()
-    passenger_external_map: dict[int, str] = {}
-
-    for p in passenger_rows:
-        try:
-            p_ext = _trip_passenger_external_id_key(
-                p,
-                booking_by_id=passenger_booking_by_id,
-            )
-        except Exception:
-            p_ext = None
-
-        if p_ext:
-            p_ext = str(p_ext).strip()
-            passenger_external_map[int(getattr(p, "id", 0) or 0)] = p_ext
-            external_ids.add(p_ext)
-
-    booking_by_external_id: dict[str, Booking] = {}
-    if external_ids:
-        matched_bookings = (
-            db.query(Booking)
-            .filter(cast(Booking.external_id, String).in_(list(external_ids)))
-            .all()
-        )
-
-        for b in matched_bookings:
-            ext = _booking_external_id_key(b)
-            if ext and ext not in booking_by_external_id:
-                booking_by_external_id[ext] = b
-
     for p in passenger_rows:
         p_booking_id = getattr(p, "booking_id", None)
 
@@ -2713,54 +2997,38 @@ def _service_taken_seats(
         ):
             continue
 
-        p_external_id = passenger_external_map.get(int(getattr(p, "id", 0) or 0))
+        # Ако има unlinked TripPassenger със същия external_id като текущия booking,
+        # не го броим като чуждо заето място.
+        if exclude_booking_id is not None and current_external_id:
+            try:
+                p_external_id = _trip_passenger_external_id_key(
+                    p,
+                    booking_by_id=passenger_booking_by_id,
+                )
+            except Exception:
+                p_external_id = None
 
-        # Ако unlinked passenger е реално текущата резервация, не блокира собственото място.
-        if (
-            exclude_booking_id is not None
-            and current_external_id
-            and p_external_id
-            and str(p_external_id).strip() == str(current_external_id).strip()
-        ):
-            continue
+            if p_external_id and str(p_external_id).strip() == str(current_external_id).strip():
+                continue
 
-        linked_booking = None
+        seat_no = _effective_trip_passenger_seat(p)
+        seat_no = str(seat_no or "").strip()
 
-        if p_booking_id and int(p_booking_id) in passenger_booking_by_id:
-            linked_booking = passenger_booking_by_id[int(p_booking_id)]
-        elif p_external_id and p_external_id in booking_by_external_id:
-            linked_booking = booking_by_external_id[p_external_id]
-
-        p_trip_id = getattr(p, "trip_id", None)
-
-        include_passenger = False
-
-        if resolved_trip_id and p_trip_id and int(p_trip_id) == int(resolved_trip_id):
-            include_passenger = True
-
-        if not include_passenger and linked_booking:
-            include_passenger = _same_service(
-                linked_booking,
-                passenger_trip_id=p_trip_id,
-            )
-
-        if not include_passenger:
-            continue
-
-        seat_no = _seat_norm(_effective_trip_passenger_seat(p))
         if seat_no:
             taken.add(seat_no)
 
     return taken
 
-
 def _ensure_booking_has_service(db_or_booking, booking: Booking | None = None) -> bool:
     """
     Backward-compatible helper.
 
-    Поддържа и двата начина на извикване:
+    Поддържа:
       _ensure_booking_has_service(booking)
       _ensure_booking_has_service(db, booking)
+
+    За portal seat map вече ползва date + route/direction keys,
+    а не само стария _booking_service_key().
     """
     if booking is None:
         db = None
@@ -2768,7 +3036,20 @@ def _ensure_booking_has_service(db_or_booking, booking: Booking | None = None) -
     else:
         db = db_or_booking
 
-    return _booking_service_key(db, booking) is not None
+    if not booking:
+        return False
+
+    keys = _portal_booking_service_keys(db, booking)
+    if keys:
+        return True
+
+    try:
+        return _booking_service_key(db, booking) is not None
+    except Exception:
+        try:
+            return _booking_service_key(booking) is not None
+        except Exception:
+            return False
 
 
 
@@ -6432,6 +6713,13 @@ def portal_seats_state(request: Request, db: Session = Depends(get_db)):
     if booking.payment_status != "paid":
         raise HTTPException(status_code=403, detail="Payment is not approved")
 
+    # КРИТИЧНО: първо resolve-ваме trip_id
+    trip_id = _resolve_booking_trip_id(db, booking)
+    if trip_id:
+        booking.trip_id = trip_id
+        db.commit()
+        db.refresh(booking)
+
     if not _ensure_booking_has_service(db, booking):
         raise HTTPException(status_code=403, detail="Booking has no service/trip")
 
@@ -6441,50 +6729,68 @@ def portal_seats_state(request: Request, db: Session = Depends(get_db)):
         key=_seat_sort_key,
     )
 
+    selected_seats = _booking_selected_seats(booking)
+
+    # debug: показва кои trips реално вижда на тази дата
+    trip_candidates_same_date = []
+    booking_date = getattr(booking, "booking_date", None)
+
+    try:
+        if isinstance(booking_date, datetime):
+            booking_date_only = booking_date.date()
+        else:
+            booking_date_only = booking_date
+
+        if booking_date_only:
+            day_start = datetime.combine(booking_date_only, time.min)
+            day_end = day_start + timedelta(days=1)
+
+            candidates = (
+                db.query(Trip)
+                .filter(Trip.date_time.isnot(None))
+                .filter(Trip.date_time >= day_start)
+                .filter(Trip.date_time < day_end)
+                .order_by(Trip.date_time.asc(), Trip.id.asc())
+                .all()
+            )
+
+            for t in candidates:
+                trip_candidates_same_date.append({
+                    "id": t.id,
+                    "date_time": str(t.date_time),
+                    "route_from": t.route_from,
+                    "route_to": t.route_to,
+                    "norm_from": _norm_stop_key(t.route_from),
+                    "norm_to": _norm_stop_key(t.route_to),
+                })
+    except Exception:
+        trip_candidates_same_date = []
+
+    db.commit()
+
     return {
         "ok": True,
         "taken_seats": taken_seats,
-        "selected_seats": _booking_selected_seats(booking),
+        "selected_seats": selected_seats,
         "passenger_count": _booking_passenger_count(db, booking),
+        "debug": {
+            "booking_id": booking.id,
+            "external_id": str(booking.external_id or ""),
+            "trip_id": booking.trip_id,
+            "booking_date": str(booking.booking_date),
+            "route_from": booking.route_from,
+            "route_to": booking.route_to,
+            "bus_from": booking.bus_from,
+            "bus_to": booking.bus_to,
+            "norm_route_from": _norm_stop_key(booking.route_from),
+            "norm_route_to": _norm_stop_key(booking.route_to),
+            "norm_bus_from": _norm_stop_key(booking.bus_from),
+            "norm_bus_to": _norm_stop_key(booking.bus_to),
+            "taken_count": len(taken_seats),
+            "selected_count": len(selected_seats),
+            "trip_candidates_same_date": trip_candidates_same_date,
+        },
     }
-
-
-@app.get("/portal/seats/state")
-def portal_seats_state(request: Request, db: Session = Depends(get_db)):
-    booking, redirect_resp = _portal_booking_or_redirect(request, db)
-    if redirect_resp:
-        raise HTTPException(status_code=401, detail="Portal login required")
-
-    if _booking_is_cancelled_or_pending_cancellation(booking):
-        raise HTTPException(status_code=403, detail="Booking is cancelled or pending cancellation")
-
-    if _norm_payment_method(booking.payment_method) not in {"bank", "paypal"}:
-        raise HTTPException(status_code=403, detail="Seat selection is not available for this payment method")
-
-    if booking.payment_status != "paid":
-        raise HTTPException(status_code=403, detail="Payment is not approved")
-
-    if not _ensure_booking_has_service(db, booking):
-        raise HTTPException(status_code=403, detail="Booking has no service/trip")
-
-    taken_seats_raw = _service_taken_seats(
-        db=db,
-        booking=booking,
-        exclude_booking_id=booking.id,
-    )
-
-    taken_seats = sorted(
-        [str(x).strip() for x in taken_seats_raw if str(x).strip()],
-        key=_seat_sort_key,
-    )
-
-    return {
-        "ok": True,
-        "taken_seats": taken_seats,
-        "selected_seats": _booking_selected_seats(booking),
-        "passenger_count": _booking_passenger_count(db, booking),
-    }
-
 
 @app.post("/portal/seats/assign")
 async def portal_assign_seats(request: Request, db: Session = Depends(get_db)):
