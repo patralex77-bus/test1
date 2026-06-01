@@ -34,7 +34,7 @@
 
         <div class="flex flex-wrap gap-2">
           <span class="meta-chip live">
-            LIVE DATA
+            Live data
           </span>
 
           <span class="meta-chip">
@@ -73,7 +73,7 @@
       <button
         id="printBtn"
         type="button"
-        class="action-btn print-only-btn">
+        class="action-btn">
         Печат / PDF
       </button>
 
@@ -92,13 +92,17 @@
         placeholder="Търси по име, телефон, място, град или информация..." />
 
       <label class="filter-chip">
-        <input type="checkbox" id="onlyUnchecked" />
-        само нечекирани
+        <input
+          type="checkbox"
+          id="onlyUnchecked" />
+        само некачени
       </label>
 
       <label class="filter-chip">
-        <input type="checkbox" id="onlyUnpaid" />
-        само неплатили
+        <input
+          type="checkbox"
+          id="onlyCashPending" />
+        само CASH за касиране
       </label>
     </div>
   </div>
@@ -112,40 +116,46 @@
         Общо пътници
       </div>
 
-      <div id="statTotalPassengers" class="summary-value">
+      <div
+        id="statTotalPassengers"
+        class="summary-value">
         {{ driver_display_total | default(0, true) }}
       </div>
 
       <div class="summary-hint">
-        Актуален брой за този рейс
+        Актуален брой редове за този рейс
       </div>
     </div>
 
     <div class="summary-card">
       <div class="summary-label">
-        Чекирани
+        Качени
       </div>
 
-      <div id="statCheckedPassengers" class="summary-value text-emerald-700">
+      <div
+        id="statCheckedPassengers"
+        class="summary-value text-emerald-700">
         0
       </div>
 
       <div class="summary-hint">
-        Пътници, които вече са качени
+        Пътници, записани след QR сканиране
       </div>
     </div>
 
     <div class="summary-card">
       <div class="summary-label">
-        Неплатили
+        CASH за касиране
       </div>
 
-      <div id="statUnpaidPassengers" class="summary-value text-rose-700">
+      <div
+        id="statCashPendingPassengers"
+        class="summary-value text-amber-700">
         0
       </div>
 
       <div class="summary-hint">
-        Нужна е проверка или плащане в брой
+        Резервации в брой без записано плащане
       </div>
     </div>
 
@@ -154,7 +164,9 @@
         Показвани след филтър
       </div>
 
-      <div id="statVisiblePassengers" class="summary-value text-blue-700">
+      <div
+        id="statVisiblePassengers"
+        class="summary-value text-blue-700">
         0
       </div>
 
@@ -176,8 +188,8 @@
           </div>
 
           <div class="mt-1 text-sm leading-6 text-amber-800">
-            Следните резервации са налични в системата, но все още не са напълно
-            покрити с отделни редове за всички пътници.
+            Следните резервации са налични в системата, но все още не са
+            напълно покрити с отделни редове за всички пътници.
           </div>
         </div>
 
@@ -197,8 +209,8 @@
               <th>Общо</th>
               <th>Покрити</th>
               <th>Липсват</th>
-              <th>Плащане</th>
-              <th>Статус</th>
+              <th>Payment</th>
+              <th>Status</th>
             </tr>
           </thead>
 
@@ -211,11 +223,13 @@
                 <td>{{ item.route }}</td>
                 <td>{{ item.wanted_count }}</td>
                 <td>{{ item.covered_count }}</td>
+
                 <td>
                   <span class="missing-badge">
                     {{ item.missing_count }}
                   </span>
                 </td>
+
                 <td>{{ item.payment_status }}</td>
                 <td>{{ item.booking_status }}</td>
               </tr>
@@ -229,9 +243,12 @@
   <!-- =======================================================
        TABLE VIEW
        ======================================================= -->
-  <div id="tableView" class="panel">
+  <div
+    id="tableView"
+    class="panel">
+
     <div class="overflow-x-auto">
-      <table class="data-table min-w-[1120px]">
+      <table class="data-table min-w-[1160px]">
         <thead>
           <tr>
             <th style="width:52px;">№</th>
@@ -241,8 +258,8 @@
             <th style="width:145px;">Телефон</th>
             <th style="width:85px;">Място</th>
             <th style="width:225px;">Информация</th>
-            <th style="width:125px;">Качване</th>
-            <th style="width:150px;">Плащане</th>
+            <th style="width:120px;">Качване</th>
+            <th style="width:190px;">Плащане</th>
           </tr>
         </thead>
 
@@ -252,9 +269,12 @@
   </div>
 
   <!-- =======================================================
-       CARD VIEW — BETTER FOR TABLETS
+       CARD VIEW — TABLET / MOBILE
        ======================================================= -->
-  <div id="cardView" class="cards hidden"></div>
+  <div
+    id="cardView"
+    class="cards hidden">
+  </div>
 
   <!-- =======================================================
        ROUTE + CASH SUMMARY
@@ -296,7 +316,7 @@
 
     <div class="summary-card">
       <div class="summary-title">
-        Суми
+        Финансово обобщение
       </div>
 
       <div class="totals">
@@ -305,7 +325,9 @@
             Очаквани EUR
           </div>
 
-          <div id="expEUR" class="total-value">
+          <div
+            id="expEUR"
+            class="total-value">
             0.00
           </div>
         </div>
@@ -315,7 +337,9 @@
             Очаквани UAH
           </div>
 
-          <div id="expUAH" class="total-value">
+          <div
+            id="expUAH"
+            class="total-value">
             0.00
           </div>
         </div>
@@ -324,20 +348,24 @@
 
         <div class="total-row">
           <div class="total-label">
-            Реални EUR
+            Касирани EUR
           </div>
 
-          <div id="actEUR" class="total-value text-emerald-700">
+          <div
+            id="actEUR"
+            class="total-value text-emerald-700">
             0.00
           </div>
         </div>
 
         <div class="total-row">
           <div class="total-label">
-            Реални UAH
+            Касирани UAH
           </div>
 
-          <div id="actUAH" class="total-value text-emerald-700">
+          <div
+            id="actUAH"
+            class="total-value text-emerald-700">
             0.00
           </div>
         </div>
@@ -346,7 +374,7 @@
       <div class="summary-hint mt-3">
         Очаквани суми: от amountDue или информацията в реда.<br>
         Потвърдените онлайн плащания не се включват като сума за събиране.<br>
-        Реални суми: записаните плащания в касата.
+        Касирани суми: записаните плащания в брой след QR сканиране.
       </div>
     </div>
   </div>
@@ -378,9 +406,9 @@
 
   .back-btn {
     display: inline-flex;
+    min-height: 44px;
     align-items: center;
     justify-content: center;
-    min-height: 44px;
     border-radius: 12px;
     background: #f1f5f9;
     padding: 10px 12px;
@@ -688,6 +716,8 @@
 
   .status-badge,
   .cash-badge,
+  .cash-due-badge,
+  .not-applicable-badge,
   .pending-badge,
   .refused-badge,
   .oebb-badge,
@@ -702,25 +732,41 @@
     font-size: 11px;
     font-weight: 900;
     letter-spacing: 0.02em;
-    text-transform: uppercase;
   }
 
   .status-badge {
     border: 1px solid #86efac;
     background: #dcfce7;
     color: #166534;
+    text-transform: uppercase;
   }
 
   .cash-badge {
-    border: 1px solid #bfdbfe;
-    background: #eff6ff;
-    color: #1d4ed8;
+    min-width: 110px;
+    border: 1px solid #86efac;
+    background: #dcfce7;
+    color: #166534;
+  }
+
+  .cash-due-badge {
+    min-width: 145px;
+    border: 1px solid #fcd34d;
+    background: #fffbeb;
+    color: #92400e;
+  }
+
+  .not-applicable-badge {
+    min-width: 38px;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #94a3b8;
   }
 
   .pending-badge {
     border: 1px solid #cbd5e1;
     background: #f8fafc;
     color: #475569;
+    text-transform: uppercase;
   }
 
   .refused-badge,
@@ -729,18 +775,21 @@
     border: 1px solid #fca5a5;
     background: #fef2f2;
     color: #991b1b;
+    text-transform: uppercase;
   }
 
   .oebb-badge {
     border: 1px solid #fcd34d;
     background: #fffbeb;
     color: #92400e;
+    text-transform: uppercase;
   }
 
   .payment-approved-badge {
     border: 1px solid #86efac;
     background: #dcfce7;
     color: #166534;
+    text-transform: uppercase;
   }
 
   .totals {
@@ -868,21 +917,29 @@
 (function () {
   console.log("driver_trip_detail live view loaded");
 
-  const tripId = Number(window.DRIVER_TRIP_ID || 0);
+  const tripId = Number(
+    window.DRIVER_TRIP_ID ||
+    0
+  );
 
   let passengers = [];
 
   /*
-    На таблет и телефон card view е по-удобен.
+    На таблет и телефон Card view е по-удобен.
     На desktop първоначално се показва таблицата.
   */
-  let view = window.matchMedia("(max-width: 900px)").matches
-    ? "cards"
-    : "table";
+  let view = window
+    .matchMedia("(max-width: 900px)")
+    .matches
+      ? "cards"
+      : "table";
 
   function coalesce(...values) {
     for (const value of values) {
-      if (value !== undefined && value !== null) {
+      if (
+        value !== undefined &&
+        value !== null
+      ) {
         return value;
       }
     }
@@ -900,7 +957,10 @@
   }
 
   function cleanExcelIntLike(value) {
-    if (value === null || value === undefined) {
+    if (
+      value === null ||
+      value === undefined
+    ) {
       return "";
     }
 
@@ -910,15 +970,23 @@
       return "";
     }
 
-    return text.replace(/([.,])0+$/, "");
+    return text.replace(
+      /([.,])0+$/,
+      ""
+    );
   }
 
   function parseMoney(value) {
-    if (value === null || value === undefined) {
+    if (
+      value === null ||
+      value === undefined
+    ) {
       return null;
     }
 
-    if (typeof value === "number") {
+    if (
+      typeof value === "number"
+    ) {
       return Number.isFinite(value)
         ? value
         : null;
@@ -934,11 +1002,20 @@
       .replace(/[^\d.,-]/g, "")
       .replace(/\s+/g, "");
 
-    if (text.includes(",") && text.includes(".")) {
-      text = text.replace(/\./g, "");
+    if (
+      text.includes(",") &&
+      text.includes(".")
+    ) {
+      text = text.replace(
+        /\./g,
+        ""
+      );
     }
 
-    text = text.replace(/,/g, ".");
+    text = text.replace(
+      /,/g,
+      "."
+    );
 
     const parsed = Number(text);
 
@@ -948,13 +1025,20 @@
   }
 
   function inferCurrencyFromRaw(rawValue) {
-    const text = String(rawValue ?? "").toLowerCase();
+    const text = String(
+      rawValue ??
+      ""
+    ).toLowerCase();
 
-    if (/(грн|uah|₴|гривн(?:а|и)?)/i.test(text)) {
+    if (
+      /(грн|uah|₴|гривн(?:а|и)?)/i.test(text)
+    ) {
       return "UAH";
     }
 
-    if (/(євро|евро|eur|€)/i.test(text)) {
+    if (
+      /(євро|евро|eur|€)/i.test(text)
+    ) {
       return "EUR";
     }
 
@@ -962,7 +1046,10 @@
   }
 
   function parseExpectedFromInfo(rawValue) {
-    const text = String(rawValue ?? "").trim();
+    const text = String(
+      rawValue ??
+      ""
+    ).trim();
 
     if (!text) {
       return {
@@ -971,13 +1058,22 @@
       };
     }
 
-    if (/(€|eur|євро|евро)/iu.test(text)) {
-      const match = text.match(/(\d[\d\s]*([.,]\d{1,2})?)/);
+    if (
+      /(€|eur|євро|евро)/iu.test(text)
+    ) {
+      const match = text.match(
+        /(\d[\d\s]*([.,]\d{1,2})?)/
+      );
+
       const amount = match
         ? parseMoney(match[1])
         : null;
 
-      if (amount !== null && amount > 0 && amount <= 2000) {
+      if (
+        amount !== null &&
+        amount > 0 &&
+        amount <= 2000
+      ) {
         return {
           due: amount,
           cur: "EUR"
@@ -990,13 +1086,21 @@
       };
     }
 
-    if (/(uah|грн|гривн(?:а|и)?|₴)/iu.test(text)) {
-      const match = text.match(/(\d[\d\s]*([.,]\d{1,2})?)/);
+    if (
+      /(uah|грн|гривн(?:а|и)?|₴)/iu.test(text)
+    ) {
+      const match = text.match(
+        /(\d[\d\s]*([.,]\d{1,2})?)/
+      );
+
       const amount = match
         ? parseMoney(match[1])
         : null;
 
-      if (amount !== null && amount > 0) {
+      if (
+        amount !== null &&
+        amount > 0
+      ) {
         return {
           due: amount,
           cur: "UAH"
@@ -1020,10 +1124,17 @@
       };
     }
 
-    const integerPart = plainNumberMatch[1];
-    const decimalPart = plainNumberMatch[2] || "";
+    const integerPart =
+      plainNumberMatch[1];
 
-    if (decimalPart && !/^0{1,2}$/.test(decimalPart)) {
+    const decimalPart =
+      plainNumberMatch[2] ||
+      "";
+
+    if (
+      decimalPart &&
+      !/^0{1,2}$/.test(decimalPart)
+    ) {
       return {
         due: null,
         cur: null
@@ -1031,7 +1142,12 @@
     }
 
     const amount = Number(
-      integerPart + (decimalPart ? "." + decimalPart : "")
+      integerPart +
+      (
+        decimalPart
+          ? "." + decimalPart
+          : ""
+      )
     );
 
     if (
@@ -1051,187 +1167,248 @@
     };
   }
 
-  function normalizePassenger(rawPassenger) {
+  /*
+    =========================================================
+    КРИТИЧНА ФУНКЦИЯ:
+    Нормализира всички backend варианти до един общ формат.
+    =========================================================
+  */
+  function normalizePassenger(p) {
     return {
       id: coalesce(
-        rawPassenger.id,
+        p.id,
         null
       ),
 
       passengerNo: coalesce(
-        rawPassenger.passengerNo,
-        rawPassenger.passenger_no,
+        p.passengerNo,
+        p.passenger_no,
         ""
       ),
 
       fromCity: coalesce(
-        rawPassenger.fromCity,
-        rawPassenger.effectiveFromCity,
-        rawPassenger.manualFromCity,
-        rawPassenger.from_city,
+        p.fromCity,
+        p.effectiveFromCity,
+        p.manualFromCity,
+        p.from_city,
         ""
       ),
 
       toCity: coalesce(
-        rawPassenger.toCity,
-        rawPassenger.effectiveToCity,
-        rawPassenger.manualToCity,
-        rawPassenger.to_city,
+        p.toCity,
+        p.effectiveToCity,
+        p.manualToCity,
+        p.to_city,
         ""
       ),
 
       fullName: coalesce(
-        rawPassenger.fullName,
-        rawPassenger.effectiveFullName,
-        rawPassenger.manualFullName,
-        rawPassenger.full_name,
+        p.fullName,
+        p.effectiveFullName,
+        p.manualFullName,
+        p.full_name,
         ""
       ),
 
       phone: coalesce(
-        rawPassenger.phone,
-        rawPassenger.effectivePhone,
-        rawPassenger.manualPhone,
+        p.phone,
+        p.effectivePhone,
+        p.manualPhone,
+        p.phone_number,
         ""
       ),
 
       seatNo: coalesce(
-        rawPassenger.seatNo,
-        rawPassenger.effectiveSeatNo,
-        rawPassenger.manualSeatNo,
-        rawPassenger.seat_no,
+        p.seatNo,
+        p.effectiveSeatNo,
+        p.manualSeatNo,
+        p.bookingSeatNo,
+        p.seat_no,
         ""
       ),
 
       voucherRaw: coalesce(
-        rawPassenger.voucherRaw,
-        rawPassenger.effectiveVoucherRaw,
-        rawPassenger.manualVoucherRaw,
-        rawPassenger.voucher_or_amount_raw,
+        p.voucherRaw,
+        p.effectiveVoucherRaw,
+        p.manualVoucherRaw,
+        p.voucher_or_amount_raw,
         ""
       ),
 
       voucherCode: coalesce(
-        rawPassenger.voucherCode,
-        rawPassenger.voucher_code,
+        p.voucherCode,
+        p.voucher_code,
         ""
       ),
 
       amountDue: coalesce(
-        rawPassenger.amountDue,
-        rawPassenger.amount_due,
+        p.amountDue,
+        p.amount_due,
         null
       ),
 
       checkedIn: Boolean(
         coalesce(
-          rawPassenger.checkedIn,
-          rawPassenger.checked_in,
+          p.checkedIn,
+          p.checked_in,
           false
         )
       ),
 
       paid: Boolean(
         coalesce(
-          rawPassenger.paid,
+          p.paid,
           false
         )
       ),
 
       amount: coalesce(
-        rawPassenger.amount,
+        p.amount,
         null
       ),
 
       currency: String(
         coalesce(
-          rawPassenger.currency,
+          p.currency,
           "EUR"
-        )
-      ).toUpperCase(),
+        ) ||
+        "EUR"
+      )
+        .trim()
+        .toUpperCase(),
 
       oebb: Boolean(
         coalesce(
-          rawPassenger.oebb,
+          p.oebb,
           false
         )
       ),
 
       paymentApproved: Boolean(
         coalesce(
-          rawPassenger.paymentApproved,
+          p.paymentApproved,
+          p.payment_approved,
           false
         )
       ),
 
       paymentBadgeLabel: coalesce(
-        rawPassenger.paymentBadgeLabel,
+        p.paymentBadgeLabel,
+        p.payment_badge_label,
         "PAYMENT APPROVED"
       ),
 
+      /*
+        Тези полета идват от Booking overlay в main.py.
+        Те са задължителни за правилното показване на CASH.
+      */
+      paymentMethod: String(
+        coalesce(
+          p.paymentMethod,
+          p.payment_method,
+          ""
+        ) ||
+        ""
+      )
+        .trim()
+        .toLowerCase(),
+
+      cashRequired: Boolean(
+        coalesce(
+          p.cashRequired,
+          p.cash_required,
+          false
+        )
+      ),
+
+      bookingTotal: coalesce(
+        p.bookingTotal,
+        p.booking_total,
+        null
+      ),
+
+      bookingCurrency: String(
+        coalesce(
+          p.bookingCurrency,
+          p.booking_currency,
+          p.currency,
+          "EUR"
+        ) ||
+        "EUR"
+      )
+        .trim()
+        .toUpperCase(),
+
       badClient: Boolean(
         coalesce(
-          rawPassenger.badClient,
+          p.badClient,
+          p.bad_client,
           false
         )
       ),
 
       badReason: coalesce(
-        rawPassenger.badReason,
+        p.badReason,
+        p.bad_reason,
         ""
       ),
 
       badCount: Number(
         coalesce(
-          rawPassenger.badCount,
+          p.badCount,
+          p.bad_count,
           0
         )
       ),
 
       badMatchedBy: coalesce(
-        rawPassenger.badMatchedBy,
+        p.badMatchedBy,
+        p.bad_matched_by,
         ""
       ),
 
-      boardingStatus: coalesce(
-        rawPassenger.boardingStatus,
-        rawPassenger.boarding_status,
+      boardingStatus: String(
+        coalesce(
+          p.boardingStatus,
+          p.boarding_status,
+          "pending"
+        ) ||
         "pending"
-      ),
+      )
+        .trim()
+        .toLowerCase(),
 
       refusedReason: coalesce(
-        rawPassenger.refusedReason,
-        rawPassenger.refused_reason,
+        p.refusedReason,
+        p.refused_reason,
         ""
       ),
 
       oebbChecked: Boolean(
         coalesce(
-          rawPassenger.oebbChecked,
-          rawPassenger.oebb_checked,
+          p.oebbChecked,
+          p.oebb_checked,
           false
         )
       ),
 
       cashCollectedAmount: coalesce(
-        rawPassenger.cashCollectedAmount,
-        rawPassenger.cash_collected_amount,
+        p.cashCollectedAmount,
+        p.cash_collected_amount,
         null
       ),
 
-      cashCollectedCurrency: coalesce(
-        rawPassenger.cashCollectedCurrency,
-        rawPassenger.cash_collected_currency,
+      cashCollectedCurrency: String(
+        coalesce(
+          p.cashCollectedCurrency,
+          p.cash_collected_currency,
+          ""
+        ) ||
         ""
       )
+        .trim()
+        .toUpperCase()
     };
-  }
-
-  function isEffectivelyPaid(passenger) {
-    return Boolean(
-      passenger.paymentApproved ||
-      passenger.paid
-    );
   }
 
   function isCheckedIn(passenger) {
@@ -1241,20 +1418,98 @@
     );
   }
 
+  function isCashReservation(passenger) {
+    return Boolean(
+      passenger.cashRequired === true ||
+      String(
+        passenger.paymentMethod ||
+        ""
+      )
+        .trim()
+        .toLowerCase() === "cash"
+    );
+  }
+
+  function isCashCollected(passenger) {
+    if (
+      !isCashReservation(passenger)
+    ) {
+      return false;
+    }
+
+    return Boolean(
+      passenger.paid ||
+      parseMoney(
+        passenger.cashCollectedAmount
+      ) !== null
+    );
+  }
+
+  function getExpectedCashAmount(passenger) {
+    const directAmount = parseMoney(
+      passenger.amountDue ??
+      passenger.bookingTotal
+    );
+
+    if (
+      directAmount !== null
+    ) {
+      return directAmount;
+    }
+
+    const parsed = parseExpectedFromInfo(
+      passenger.voucherRaw
+    );
+
+    return parsed.due;
+  }
+
+  function getExpectedCashCurrency(passenger) {
+    const parsed = parseExpectedFromInfo(
+      passenger.voucherRaw
+    );
+
+    return String(
+      passenger.bookingCurrency ||
+      passenger.currency ||
+      parsed.cur ||
+      "EUR"
+    )
+      .trim()
+      .toUpperCase();
+  }
+
+  function isEffectivelyPaid(passenger) {
+    return Boolean(
+      passenger.paymentApproved ||
+      passenger.paid ||
+      parseMoney(
+        passenger.cashCollectedAmount
+      ) !== null
+    );
+  }
+
   function renderBoardingStatus(passenger) {
-    if (isCheckedIn(passenger)) {
+    if (
+      isCheckedIn(passenger)
+    ) {
       return `
         <span class="status-badge">
-          Чекиран
+          OK
         </span>
       `;
     }
 
-    if (passenger.boardingStatus === "refused") {
+    if (
+      passenger.boardingStatus === "refused"
+    ) {
       return `
         <span
           class="refused-badge"
-          title="${escapeHtml(passenger.refusedReason || "")}">
+          title="${escapeHtml(
+            passenger.refusedReason ||
+            ""
+          )}">
           Отказан
         </span>
       `;
@@ -1268,46 +1523,80 @@
   }
 
   function renderCashStatus(passenger) {
-    if (passenger.paymentApproved) {
+    /*
+      Колоната "Плащане" е само за CASH резервации.
+      За Bank transfer и PayPal показваме тире.
+    */
+    if (
+      !isCashReservation(passenger)
+    ) {
       return `
-        <span class="cash-badge">
-          Online paid
+        <span class="not-applicable-badge">
+          —
         </span>
       `;
     }
 
-    if (passenger.paid) {
-      const amount = parseMoney(
-        passenger.cashCollectedAmount ??
-        passenger.amount
-      );
+    /*
+      Първи приоритет:
+      реално записаната при QR сканиране сума.
+    */
+    const collectedAmount = parseMoney(
+      passenger.cashCollectedAmount ??
+      (
+        passenger.paid
+          ? passenger.amount
+          : null
+      )
+    );
 
-      const currency = escapeHtml(
-        String(
-          passenger.cashCollectedCurrency ||
-          passenger.currency ||
-          "EUR"
-        ).toUpperCase()
-      );
+    const collectedCurrency = String(
+      passenger.cashCollectedCurrency ||
+      passenger.currency ||
+      passenger.bookingCurrency ||
+      "EUR"
+    )
+      .trim()
+      .toUpperCase();
 
-      if (amount !== null) {
-        return `
-          <span class="cash-badge">
-            Платен ${amount.toFixed(2)} ${currency}
-          </span>
-        `;
-      }
-
+    if (
+      collectedAmount !== null
+    ) {
       return `
         <span class="cash-badge">
-          Платен
+          ${collectedAmount.toFixed(2)}
+          ${escapeHtml(collectedCurrency)}
+        </span>
+      `;
+    }
+
+    /*
+      Втори приоритет:
+      сумата, която водачът трябва да касира.
+    */
+    const dueAmount = getExpectedCashAmount(
+      passenger
+    );
+
+    const dueCurrency = getExpectedCashCurrency(
+      passenger
+    );
+
+    if (
+      dueAmount !== null
+    ) {
+      return `
+        <span class="cash-due-badge">
+          За касиране:
+          ${dueAmount.toFixed(2)}
+          ${escapeHtml(dueCurrency)}
         </span>
       `;
     }
 
     return `
-      <span class="pending-badge">
-        Неплатен
+      <span class="cash-due-badge">
+        CASH — провери сумата
       </span>
     `;
   }
@@ -1315,7 +1604,9 @@
   function renderInfoCellValue(passenger) {
     const parts = [];
 
-    if (passenger.paymentApproved) {
+    if (
+      passenger.paymentApproved
+    ) {
       parts.push(`
         <span class="payment-approved-badge">
           ${escapeHtml(
@@ -1330,7 +1621,9 @@
         ""
       );
 
-      if (voucherValue) {
+      if (
+        voucherValue
+      ) {
         parts.push(`
           <span>
             ${escapeHtml(voucherValue)}
@@ -1339,7 +1632,9 @@
       }
     }
 
-    if (passenger.badClient) {
+    if (
+      passenger.badClient
+    ) {
       const tooltip = [
         passenger.badReason
           ? `Причина: ${passenger.badReason}`
@@ -1384,7 +1679,10 @@
   }
 
   function normalizeCityText(value) {
-    return String(value || "")
+    return String(
+      value ||
+      ""
+    )
       .toLowerCase()
       .trim()
       .replace(/[._,;:/\\()-]+/g, " ")
@@ -1393,9 +1691,15 @@
   }
 
   function foldLatinAccents(value) {
-    return String(value || "")
+    return String(
+      value ||
+      ""
+    )
       .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
+      .replace(
+        /[\u0300-\u036f]/g,
+        ""
+      )
       .normalize("NFC");
   }
 
@@ -1491,24 +1795,39 @@
     ]
   };
 
-  function cityAliasMatches(inputValue, aliasValue) {
-    const input = normalizeCityText(inputValue);
-    const alias = normalizeCityText(aliasValue);
+  function cityAliasMatches(
+    inputValue,
+    aliasValue
+  ) {
+    const input = normalizeCityText(
+      inputValue
+    );
 
-    if (!input || !alias) {
+    const alias = normalizeCityText(
+      aliasValue
+    );
+
+    if (
+      !input ||
+      !alias
+    ) {
       return false;
     }
 
-    if (input === alias) {
+    if (
+      input === alias ||
+      input.includes(alias)
+    ) {
       return true;
     }
 
-    if (input.includes(alias)) {
-      return true;
-    }
+    const foldedInput = foldLatinAccents(
+      input
+    );
 
-    const foldedInput = foldLatinAccents(input);
-    const foldedAlias = foldLatinAccents(alias);
+    const foldedAlias = foldLatinAccents(
+      alias
+    );
 
     return (
       foldedInput === foldedAlias ||
@@ -1517,15 +1836,30 @@
   }
 
   function canonicalCityKey(value) {
-    const normalized = normalizeCityText(value);
+    const normalized = normalizeCityText(
+      value
+    );
 
-    if (!normalized) {
+    if (
+      !normalized
+    ) {
       return "";
     }
 
-    for (const [key, aliases] of Object.entries(CITY_ALIASES)) {
-      for (const alias of aliases) {
-        if (cityAliasMatches(normalized, alias)) {
+    for (
+      const [key, aliases]
+      of Object.entries(CITY_ALIASES)
+    ) {
+      for (
+        const alias
+        of aliases
+      ) {
+        if (
+          cityAliasMatches(
+            normalized,
+            alias
+          )
+        ) {
           return key;
         }
       }
@@ -1585,14 +1919,18 @@
 
     const routeCode = getCurrentRouteCode();
 
-    if (routeCode === "IK") {
+    if (
+      routeCode === "IK"
+    ) {
       return {
         fromOrder: AT_ORDER,
         toOrder: UA_ORDER
       };
     }
 
-    if (routeCode === "KI") {
+    if (
+      routeCode === "KI"
+    ) {
       return {
         fromOrder: UA_ORDER,
         toOrder: AT_ORDER
@@ -1605,9 +1943,17 @@
     };
   }
 
-  function cityOrderIndex(cityValue, order) {
-    const key = canonicalCityKey(cityValue);
-    const index = order.indexOf(key);
+  function cityOrderIndex(
+    cityValue,
+    order
+  ) {
+    const key = canonicalCityKey(
+      cityValue
+    );
+
+    const index = order.indexOf(
+      key
+    );
 
     return index === -1
       ? 9999
@@ -1629,15 +1975,22 @@
       order
     );
 
-    if (firstIndex !== secondIndex) {
+    if (
+      firstIndex !== secondIndex
+    ) {
       return firstIndex - secondIndex;
     }
 
-    return String(firstCity || "")
-      .localeCompare(
-        String(secondCity || ""),
-        "bg"
-      );
+    return String(
+      firstCity ||
+      ""
+    ).localeCompare(
+      String(
+        secondCity ||
+        ""
+      ),
+      "bg"
+    );
   }
 
   function comparePassengersForRoute(
@@ -1649,53 +2002,74 @@
       toOrder
     } = getRouteSideOrders();
 
-    const fromComparison = compareCitiesByOrder(
-      firstPassenger.fromCity,
-      secondPassenger.fromCity,
-      fromOrder
-    );
+    const fromComparison =
+      compareCitiesByOrder(
+        firstPassenger.fromCity,
+        secondPassenger.fromCity,
+        fromOrder
+      );
 
-    if (fromComparison !== 0) {
+    if (
+      fromComparison !== 0
+    ) {
       return fromComparison;
     }
 
-    const toComparison = compareCitiesByOrder(
-      firstPassenger.toCity,
-      secondPassenger.toCity,
-      toOrder
-    );
+    const toComparison =
+      compareCitiesByOrder(
+        firstPassenger.toCity,
+        secondPassenger.toCity,
+        toOrder
+      );
 
-    if (toComparison !== 0) {
+    if (
+      toComparison !== 0
+    ) {
       return toComparison;
     }
 
-    const firstSeat = cleanExcelIntLike(
-      firstPassenger.seatNo ||
-      ""
-    );
+    const firstSeat =
+      cleanExcelIntLike(
+        firstPassenger.seatNo ||
+        ""
+      );
 
-    const secondSeat = cleanExcelIntLike(
-      secondPassenger.seatNo ||
-      ""
-    );
+    const secondSeat =
+      cleanExcelIntLike(
+        secondPassenger.seatNo ||
+        ""
+      );
 
-    const firstSeatNumber = /^\d+$/.test(firstSeat)
-      ? Number(firstSeat)
-      : 999999;
+    const firstSeatNumber =
+      /^\d+$/.test(firstSeat)
+        ? Number(firstSeat)
+        : 999999;
 
-    const secondSeatNumber = /^\d+$/.test(secondSeat)
-      ? Number(secondSeat)
-      : 999999;
+    const secondSeatNumber =
+      /^\d+$/.test(secondSeat)
+        ? Number(secondSeat)
+        : 999999;
 
-    if (firstSeatNumber !== secondSeatNumber) {
-      return firstSeatNumber - secondSeatNumber;
+    if (
+      firstSeatNumber !==
+      secondSeatNumber
+    ) {
+      return (
+        firstSeatNumber -
+        secondSeatNumber
+      );
     }
 
-    return String(firstPassenger.fullName || "")
-      .localeCompare(
-        String(secondPassenger.fullName || ""),
-        "bg"
-      );
+    return String(
+      firstPassenger.fullName ||
+      ""
+    ).localeCompare(
+      String(
+        secondPassenger.fullName ||
+        ""
+      ),
+      "bg"
+    );
   }
 
   async function fetchPassengers() {
@@ -1717,36 +2091,47 @@
 
     const data = await response
       .json()
-      .catch(() => []);
+      .catch(
+        () => []
+      );
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
       throw new Error(
-        (data && data.detail) ||
+        (
+          data &&
+          data.detail
+        ) ||
         `Зареждането е неуспешно: HTTP ${response.status}`
       );
     }
 
     /*
-      Поддържаме два варианта:
+      Поддържаме и двата API варианта:
         1) [ passenger, passenger, ... ]
         2) { passengers: [ passenger, ... ] }
     */
     const rows = Array.isArray(data)
       ? data
       : (
-          Array.isArray(data?.passengers)
+          Array.isArray(
+            data?.passengers
+          )
             ? data.passengers
             : []
         );
 
-    return rows.map(normalizePassenger);
+    return rows.map(
+      normalizePassenger
+    );
   }
 
   function matchesFilter(
     passenger,
     query,
     onlyUnchecked,
-    onlyUnpaid
+    onlyCashPending
   ) {
     if (
       onlyUnchecked &&
@@ -1756,17 +2141,23 @@
     }
 
     if (
-      onlyUnpaid &&
-      isEffectivelyPaid(passenger)
+      onlyCashPending &&
+      (
+        !isCashReservation(passenger) ||
+        isCashCollected(passenger)
+      )
     ) {
       return false;
     }
 
-    if (!query) {
+    if (
+      !query
+    ) {
       return true;
     }
 
-    const normalizedQuery = query.toLowerCase();
+    const normalizedQuery =
+      query.toLowerCase();
 
     return [
       passenger.fullName,
@@ -1775,26 +2166,37 @@
       passenger.voucherRaw,
       passenger.fromCity,
       passenger.toCity,
-      passenger.badReason
-    ].some((value) => {
-      return String(value || "")
-        .toLowerCase()
-        .includes(normalizedQuery);
-    });
+      passenger.badReason,
+      passenger.paymentMethod
+    ].some(
+      (value) => {
+        return String(
+          value ||
+          ""
+        )
+          .toLowerCase()
+          .includes(
+            normalizedQuery
+          );
+      }
+    );
   }
 
   function getFilteredPassengers() {
-    const searchInput = document.getElementById(
-      "search"
-    );
+    const searchInput =
+      document.getElementById(
+        "search"
+      );
 
-    const onlyUncheckedInput = document.getElementById(
-      "onlyUnchecked"
-    );
+    const onlyUncheckedInput =
+      document.getElementById(
+        "onlyUnchecked"
+      );
 
-    const onlyUnpaidInput = document.getElementById(
-      "onlyUnpaid"
-    );
+    const onlyCashPendingInput =
+      document.getElementById(
+        "onlyCashPending"
+      );
 
     const query = String(
       searchInput?.value ||
@@ -1802,80 +2204,118 @@
     ).trim();
 
     return passengers
-      .filter((passenger) => {
-        return matchesFilter(
-          passenger,
-          query,
-          Boolean(onlyUncheckedInput?.checked),
-          Boolean(onlyUnpaidInput?.checked)
-        );
-      })
+      .filter(
+        (passenger) => {
+          return matchesFilter(
+            passenger,
+            query,
+            Boolean(
+              onlyUncheckedInput?.checked
+            ),
+            Boolean(
+              onlyCashPendingInput?.checked
+            )
+          );
+        }
+      )
       .slice()
-      .sort(comparePassengersForRoute);
+      .sort(
+        comparePassengersForRoute
+      );
   }
 
-  function renderPassengerStats(filteredPassengers) {
-    const totalElement = document.getElementById(
-      "statTotalPassengers"
-    );
-
-    const checkedElement = document.getElementById(
-      "statCheckedPassengers"
-    );
-
-    const unpaidElement = document.getElementById(
-      "statUnpaidPassengers"
-    );
-
-    const visibleElement = document.getElementById(
-      "statVisiblePassengers"
-    );
-
-    const checkedCount = passengers.filter(
-      isCheckedIn
-    ).length;
-
-    const unpaidCount = passengers.filter(
-      (passenger) => !isEffectivelyPaid(passenger)
-    ).length;
-
-    if (totalElement) {
-      totalElement.textContent = String(
-        passengers.length
+  function renderPassengerStats(
+    filteredPassengers
+  ) {
+    const totalElement =
+      document.getElementById(
+        "statTotalPassengers"
       );
+
+    const checkedElement =
+      document.getElementById(
+        "statCheckedPassengers"
+      );
+
+    const cashPendingElement =
+      document.getElementById(
+        "statCashPendingPassengers"
+      );
+
+    const visibleElement =
+      document.getElementById(
+        "statVisiblePassengers"
+      );
+
+    const checkedCount =
+      passengers.filter(
+        isCheckedIn
+      ).length;
+
+    const cashPendingCount =
+      passengers.filter(
+        (passenger) => {
+          return (
+            isCashReservation(passenger) &&
+            !isCashCollected(passenger)
+          );
+        }
+      ).length;
+
+    if (
+      totalElement
+    ) {
+      totalElement.textContent =
+        String(
+          passengers.length
+        );
     }
 
-    if (checkedElement) {
-      checkedElement.textContent = String(
-        checkedCount
-      );
+    if (
+      checkedElement
+    ) {
+      checkedElement.textContent =
+        String(
+          checkedCount
+        );
     }
 
-    if (unpaidElement) {
-      unpaidElement.textContent = String(
-        unpaidCount
-      );
+    if (
+      cashPendingElement
+    ) {
+      cashPendingElement.textContent =
+        String(
+          cashPendingCount
+        );
     }
 
-    if (visibleElement) {
-      visibleElement.textContent = String(
-        filteredPassengers.length
-      );
+    if (
+      visibleElement
+    ) {
+      visibleElement.textContent =
+        String(
+          filteredPassengers.length
+        );
     }
   }
 
   function renderTable(list) {
-    const tbody = document.getElementById(
-      "rowsDriver"
-    );
+    const tbody =
+      document.getElementById(
+        "rowsDriver"
+      );
 
-    if (!tbody) {
+    if (
+      !tbody
+    ) {
       return;
     }
 
     tbody.innerHTML = "";
 
-    if (!list.length) {
+    if (
+      !list.length
+    ) {
       tbody.innerHTML = `
         <tr>
           <td
@@ -1889,65 +2329,105 @@
       return;
     }
 
-    list.forEach((passenger, index) => {
-      const row = document.createElement("tr");
+    list.forEach(
+      (
+        passenger,
+        index
+      ) => {
+        const row =
+          document.createElement(
+            "tr"
+          );
 
-      row.innerHTML = `
-        <td>
-          ${index + 1}
-        </td>
+        row.innerHTML = `
+          <td>
+            ${index + 1}
+          </td>
 
-        <td>
-          ${escapeHtml(passenger.fromCity || "")}
-        </td>
+          <td>
+            ${escapeHtml(
+              passenger.fromCity ||
+              ""
+            )}
+          </td>
 
-        <td>
-          ${escapeHtml(passenger.toCity || "")}
-        </td>
+          <td>
+            ${escapeHtml(
+              passenger.toCity ||
+              ""
+            )}
+          </td>
 
-        <td>
-          <strong>
-            ${escapeHtml(passenger.fullName || "—")}
-          </strong>
-        </td>
+          <td>
+            <strong>
+              ${escapeHtml(
+                passenger.fullName ||
+                "—"
+              )}
+            </strong>
+          </td>
 
-        <td>
-          ${escapeHtml(cleanExcelIntLike(passenger.phone || ""))}
-        </td>
+          <td>
+            ${escapeHtml(
+              cleanExcelIntLike(
+                passenger.phone ||
+                ""
+              )
+            )}
+          </td>
 
-        <td>
-          <strong>
-            ${escapeHtml(cleanExcelIntLike(passenger.seatNo || "—"))}
-          </strong>
-        </td>
+          <td>
+            <strong>
+              ${escapeHtml(
+                cleanExcelIntLike(
+                  passenger.seatNo ||
+                  "—"
+                )
+              )}
+            </strong>
+          </td>
 
-        <td>
-          ${renderInfoCellValue(passenger)}
-        </td>
+          <td>
+            ${renderInfoCellValue(
+              passenger
+            )}
+          </td>
 
-        <td>
-          ${renderBoardingStatus(passenger)}
-        </td>
+          <td>
+            ${renderBoardingStatus(
+              passenger
+            )}
+          </td>
 
-        <td>
-          ${renderCashStatus(passenger)}
-        </td>
-      `;
+          <td>
+            ${renderCashStatus(
+              passenger
+            )}
+          </td>
+        `;
 
-      tbody.appendChild(row);
-    });
+        tbody.appendChild(
+          row
+        );
+      }
+    );
   }
 
   function renderCards(list) {
-    const wrap = document.getElementById(
-      "cardView"
-    );
+    const wrap =
+      document.getElementById(
+        "cardView"
+      );
 
-    if (!wrap) {
+    if (
+      !wrap
+    ) {
       return;
     }
 
-    if (!list.length) {
+    if (
+      !list.length
+    ) {
       wrap.innerHTML = `
         <div class="passenger-card text-sm text-slate-500">
           Няма пътници за показване.
@@ -1958,104 +2438,137 @@
     }
 
     wrap.innerHTML = list
-      .map((passenger) => {
-        return `
-          <div class="passenger-card">
-            <div class="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <div class="passenger-card-title">
-                  ${escapeHtml(passenger.fullName || "—")}
+      .map(
+        (passenger) => {
+          return `
+            <div class="passenger-card">
+              <div class="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div class="passenger-card-title">
+                    ${escapeHtml(
+                      passenger.fullName ||
+                      "—"
+                    )}
+                  </div>
+
+                  <div class="passenger-card-sub">
+                    ${escapeHtml(
+                      passenger.fromCity ||
+                      "—"
+                    )}
+                    →
+                    ${escapeHtml(
+                      passenger.toCity ||
+                      "—"
+                    )}
+                  </div>
                 </div>
 
-                <div class="passenger-card-sub">
-                  ${escapeHtml(passenger.fromCity || "—")}
-                  →
-                  ${escapeHtml(passenger.toCity || "—")}
+                <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                  <div class="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                    Място
+                  </div>
+
+                  <div class="mt-1 text-lg font-black text-slate-900">
+                    ${escapeHtml(
+                      cleanExcelIntLike(
+                        passenger.seatNo ||
+                        "—"
+                      )
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
-                <div class="text-[10px] font-black uppercase tracking-wide text-slate-500">
-                  Място
+              <div class="card-meta-grid">
+                <div class="card-meta-item">
+                  <div class="card-meta-label">
+                    Телефон
+                  </div>
+
+                  <div class="card-meta-value">
+                    ${escapeHtml(
+                      cleanExcelIntLike(
+                        passenger.phone ||
+                        "—"
+                      )
+                    )}
+                  </div>
                 </div>
 
-                <div class="mt-1 text-lg font-black text-slate-900">
-                  ${escapeHtml(cleanExcelIntLike(passenger.seatNo || "—"))}
+                <div class="card-meta-item">
+                  <div class="card-meta-label">
+                    Качване
+                  </div>
+
+                  <div class="card-meta-value">
+                    ${renderBoardingStatus(
+                      passenger
+                    )}
+                  </div>
+                </div>
+
+                <div class="card-meta-item">
+                  <div class="card-meta-label">
+                    Плащане
+                  </div>
+
+                  <div class="card-meta-value">
+                    ${renderCashStatus(
+                      passenger
+                    )}
+                  </div>
+                </div>
+
+                <div class="card-meta-item">
+                  <div class="card-meta-label">
+                    Информация
+                  </div>
+
+                  <div class="card-meta-value">
+                    ${renderInfoCellValue(
+                      passenger
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
-
-            <div class="card-meta-grid">
-              <div class="card-meta-item">
-                <div class="card-meta-label">
-                  Телефон
-                </div>
-
-                <div class="card-meta-value">
-                  ${escapeHtml(cleanExcelIntLike(passenger.phone || "—"))}
-                </div>
-              </div>
-
-              <div class="card-meta-item">
-                <div class="card-meta-label">
-                  Качване
-                </div>
-
-                <div class="card-meta-value">
-                  ${renderBoardingStatus(passenger)}
-                </div>
-              </div>
-
-              <div class="card-meta-item">
-                <div class="card-meta-label">
-                  Плащане
-                </div>
-
-                <div class="card-meta-value">
-                  ${renderCashStatus(passenger)}
-                </div>
-              </div>
-
-              <div class="card-meta-item">
-                <div class="card-meta-label">
-                  Информация
-                </div>
-
-                <div class="card-meta-value">
-                  ${renderInfoCellValue(passenger)}
-                </div>
-              </div>
-            </div>
-          </div>
-        `;
-      })
+          `;
+        }
+      )
       .join("");
   }
 
   function renderSummary(list) {
-    const fromElement = document.getElementById(
-      "sumFrom"
-    );
+    const fromElement =
+      document.getElementById(
+        "sumFrom"
+      );
 
-    const toElement = document.getElementById(
-      "sumTo"
-    );
+    const toElement =
+      document.getElementById(
+        "sumTo"
+      );
 
-    const expectedEurElement = document.getElementById(
-      "expEUR"
-    );
+    const expectedEurElement =
+      document.getElementById(
+        "expEUR"
+      );
 
-    const expectedUahElement = document.getElementById(
-      "expUAH"
-    );
+    const expectedUahElement =
+      document.getElementById(
+        "expUAH"
+      );
 
-    const actualEurElement = document.getElementById(
-      "actEUR"
-    );
+    const actualEurElement =
+      document.getElementById(
+        "actEUR"
+      );
 
-    const actualUahElement = document.getElementById(
-      "actUAH"
-    );
+    const actualUahElement =
+      document.getElementById(
+        "actUAH"
+      );
 
     if (
       !fromElement ||
@@ -2068,91 +2581,149 @@
       return;
     }
 
-    const fromCounts = new Map();
-    const toCounts = new Map();
+    const fromCounts =
+      new Map();
+
+    const toCounts =
+      new Map();
 
     let expectedEur = 0;
     let expectedUah = 0;
     let actualEur = 0;
     let actualUah = 0;
 
-    for (const passenger of list) {
-      const fromCity = String(
-        passenger.fromCity ||
-        ""
-      ).trim();
+    for (
+      const passenger
+      of list
+    ) {
+      const fromCity =
+        String(
+          passenger.fromCity ||
+          ""
+        ).trim();
 
-      const toCity = String(
-        passenger.toCity ||
-        ""
-      ).trim();
+      const toCity =
+        String(
+          passenger.toCity ||
+          ""
+        ).trim();
 
-      if (fromCity) {
+      if (
+        fromCity
+      ) {
         fromCounts.set(
           fromCity,
-          (fromCounts.get(fromCity) || 0) + 1
+          (
+            fromCounts.get(
+              fromCity
+            ) ||
+            0
+          ) +
+          1
         );
       }
 
-      if (toCity) {
+      if (
+        toCity
+      ) {
         toCounts.set(
           toCity,
-          (toCounts.get(toCity) || 0) + 1
+          (
+            toCounts.get(
+              toCity
+            ) ||
+            0
+          ) +
+          1
         );
       }
 
-      if (!passenger.paymentApproved) {
-        const due = parseMoney(
-          passenger.amountDue
-        );
+      /*
+        Очаквани суми:
+        само ако плащането не е потвърдено и няма вече
+        записано касиране.
+      */
+      if (
+        !passenger.paymentApproved &&
+        !isCashCollected(passenger)
+      ) {
+        const due =
+          parseMoney(
+            passenger.amountDue
+          );
 
-        const dueCurrency = String(
-          passenger.currency ||
-          inferCurrencyFromRaw(passenger.voucherRaw) ||
-          "EUR"
-        ).toUpperCase();
+        const dueCurrency =
+          String(
+            passenger.currency ||
+            inferCurrencyFromRaw(
+              passenger.voucherRaw
+            ) ||
+            "EUR"
+          ).toUpperCase();
 
-        if (due !== null) {
-          if (dueCurrency === "UAH") {
+        if (
+          due !== null
+        ) {
+          if (
+            dueCurrency === "UAH"
+          ) {
             expectedUah += due;
           } else {
             expectedEur += due;
           }
         } else {
-          const parsedExpected = parseExpectedFromInfo(
-            passenger.voucherRaw
-          );
+          const parsedExpected =
+            parseExpectedFromInfo(
+              passenger.voucherRaw
+            );
 
           if (
             parsedExpected.due !== null &&
             parsedExpected.cur
           ) {
-            if (parsedExpected.cur === "UAH") {
-              expectedUah += parsedExpected.due;
+            if (
+              parsedExpected.cur === "UAH"
+            ) {
+              expectedUah +=
+                parsedExpected.due;
             } else {
-              expectedEur += parsedExpected.due;
+              expectedEur +=
+                parsedExpected.due;
             }
           }
         }
       }
 
-      const actualCurrency = String(
-        passenger.cashCollectedCurrency ||
-        passenger.currency ||
-        inferCurrencyFromRaw(passenger.voucherRaw) ||
-        "EUR"
-      ).toUpperCase();
+      /*
+        Реални суми:
+        само реално записаните касирани стойности.
+      */
+      const actualCurrency =
+        String(
+          passenger.cashCollectedCurrency ||
+          passenger.currency ||
+          inferCurrencyFromRaw(
+            passenger.voucherRaw
+          ) ||
+          "EUR"
+        ).toUpperCase();
 
-      const actualAmount = parseMoney(
-        passenger.cashCollectedAmount ??
-        passenger.amount
-      );
+      const actualAmount =
+        parseMoney(
+          passenger.cashCollectedAmount
+        );
 
-      if (actualAmount !== null) {
-        if (actualCurrency === "UAH") {
-          actualUah += actualAmount;
+      if (
+        actualAmount !== null
+      ) {
+        if (
+          actualCurrency === "UAH"
+        ) {
+          actualUah +=
+            actualAmount;
         } else {
-          actualEur += actualAmount;
+          actualEur +=
+            actualAmount;
         }
       }
     }
@@ -2166,41 +2737,62 @@
       valueMap,
       cityOrder
     ) {
-      return [...valueMap.entries()]
-        .sort((firstEntry, secondEntry) => {
-          const comparison = compareCitiesByOrder(
-            firstEntry[0],
-            secondEntry[0],
-            cityOrder
-          );
+      return [
+        ...valueMap.entries()
+      ].sort(
+        (
+          firstEntry,
+          secondEntry
+        ) => {
+          const comparison =
+            compareCitiesByOrder(
+              firstEntry[0],
+              secondEntry[0],
+              cityOrder
+            );
 
-          if (comparison !== 0) {
+          if (
+            comparison !== 0
+          ) {
             return comparison;
           }
 
-          return secondEntry[1] - firstEntry[1];
-        });
+          return (
+            secondEntry[1] -
+            firstEntry[1]
+          );
+        }
+      );
     }
 
     fromElement.innerHTML = (
-      sortedEntries(fromCounts, fromOrder)
-        .map(([city, count]) => {
-          return `
-            <tr>
-              <td>
-                ${escapeHtml(city)}
-              </td>
+      sortedEntries(
+        fromCounts,
+        fromOrder
+      )
+        .map(
+          (
+            [city, count]
+          ) => {
+            return `
+              <tr>
+                <td>
+                  ${escapeHtml(city)}
+                </td>
 
-              <td class="text-right font-black">
-                ${count}
-              </td>
-            </tr>
-          `;
-        })
+                <td class="text-right font-black">
+                  ${count}
+                </td>
+              </tr>
+            `;
+          }
+        )
         .join("") ||
       `
         <tr>
-          <td colspan="2" class="text-slate-400">
+          <td
+            colspan="2"
+            class="text-slate-400">
             Няма данни
           </td>
         </tr>
@@ -2208,100 +2800,154 @@
     );
 
     toElement.innerHTML = (
-      sortedEntries(toCounts, toOrder)
-        .map(([city, count]) => {
-          return `
-            <tr>
-              <td>
-                ${escapeHtml(city)}
-              </td>
+      sortedEntries(
+        toCounts,
+        toOrder
+      )
+        .map(
+          (
+            [city, count]
+          ) => {
+            return `
+              <tr>
+                <td>
+                  ${escapeHtml(city)}
+                </td>
 
-              <td class="text-right font-black">
-                ${count}
-              </td>
-            </tr>
-          `;
-        })
+                <td class="text-right font-black">
+                  ${count}
+                </td>
+              </tr>
+            `;
+          }
+        )
         .join("") ||
       `
         <tr>
-          <td colspan="2" class="text-slate-400">
+          <td
+            colspan="2"
+            class="text-slate-400">
             Няма данни
           </td>
         </tr>
       `
     );
 
-    expectedEurElement.textContent = expectedEur.toFixed(2);
-    expectedUahElement.textContent = expectedUah.toFixed(2);
-    actualEurElement.textContent = actualEur.toFixed(2);
-    actualUahElement.textContent = actualUah.toFixed(2);
+    expectedEurElement.textContent =
+      expectedEur.toFixed(2);
+
+    expectedUahElement.textContent =
+      expectedUah.toFixed(2);
+
+    actualEurElement.textContent =
+      actualEur.toFixed(2);
+
+    actualUahElement.textContent =
+      actualUah.toFixed(2);
   }
 
   function updateViewButtonText() {
-    const toggleButton = document.getElementById(
-      "toggleView"
-    );
+    const toggleButton =
+      document.getElementById(
+        "toggleView"
+      );
 
-    if (!toggleButton) {
+    if (
+      !toggleButton
+    ) {
       return;
     }
 
-    toggleButton.textContent = view === "table"
-      ? "Card view"
-      : "Table view";
+    toggleButton.textContent =
+      view === "table"
+        ? "Card view"
+        : "Table view";
   }
 
   function rerenderGlobal() {
-    const tableView = document.getElementById(
-      "tableView"
-    );
+    const tableView =
+      document.getElementById(
+        "tableView"
+      );
 
-    const cardView = document.getElementById(
-      "cardView"
-    );
+    const cardView =
+      document.getElementById(
+        "cardView"
+      );
 
-    const filteredPassengers = getFilteredPassengers();
+    const filteredPassengers =
+      getFilteredPassengers();
 
-    if (view === "table") {
-      tableView?.classList.remove("hidden");
-      cardView?.classList.add("hidden");
+    if (
+      view === "table"
+    ) {
+      tableView?.classList.remove(
+        "hidden"
+      );
 
-      renderTable(filteredPassengers);
+      cardView?.classList.add(
+        "hidden"
+      );
+
+      renderTable(
+        filteredPassengers
+      );
     } else {
-      tableView?.classList.add("hidden");
-      cardView?.classList.remove("hidden");
+      tableView?.classList.add(
+        "hidden"
+      );
 
-      renderCards(filteredPassengers);
+      cardView?.classList.remove(
+        "hidden"
+      );
+
+      renderCards(
+        filteredPassengers
+      );
     }
 
     updateViewButtonText();
-    renderPassengerStats(filteredPassengers);
-    renderSummary(filteredPassengers);
+
+    renderPassengerStats(
+      filteredPassengers
+    );
+
+    renderSummary(
+      filteredPassengers
+    );
   }
 
   async function reloadPassengers(
     showStatus = true
   ) {
-    const statusElement = document.getElementById(
-      "saveStatus"
-    );
+    const statusElement =
+      document.getElementById(
+        "saveStatus"
+      );
 
     if (
       showStatus &&
       statusElement
     ) {
-      statusElement.textContent = "Обновяване...";
+      statusElement.textContent =
+        "Обновяване...";
     }
 
-    passengers = await fetchPassengers();
+    passengers =
+      await fetchPassengers();
 
-    for (const passenger of passengers) {
-      passenger.currency = String(
-        passenger.currency ||
-        inferCurrencyFromRaw(passenger.voucherRaw) ||
-        "EUR"
-      ).toUpperCase();
+    for (
+      const passenger
+      of passengers
+    ) {
+      passenger.currency =
+        String(
+          passenger.currency ||
+          inferCurrencyFromRaw(
+            passenger.voucherRaw
+          ) ||
+          "EUR"
+        ).toUpperCase();
     }
 
     rerenderGlobal();
@@ -2310,79 +2956,115 @@
       showStatus &&
       statusElement
     ) {
-      statusElement.textContent = "Обновено ✓";
+      statusElement.textContent =
+        "Обновено ✓";
 
-      setTimeout(() => {
-        if (
-          statusElement.textContent === "Обновено ✓"
-        ) {
-          statusElement.textContent = "";
-        }
-      }, 2500);
+      setTimeout(
+        () => {
+          if (
+            statusElement.textContent ===
+            "Обновено ✓"
+          ) {
+            statusElement.textContent =
+              "";
+          }
+        },
+        2500
+      );
     }
   }
 
   async function initializePage() {
-    const searchInput = document.getElementById(
-      "search"
-    );
+    const searchInput =
+      document.getElementById(
+        "search"
+      );
 
-    const onlyUncheckedInput = document.getElementById(
-      "onlyUnchecked"
-    );
+    const onlyUncheckedInput =
+      document.getElementById(
+        "onlyUnchecked"
+      );
 
-    const onlyUnpaidInput = document.getElementById(
-      "onlyUnpaid"
-    );
+    const onlyCashPendingInput =
+      document.getElementById(
+        "onlyCashPending"
+      );
 
-    const reloadButton = document.getElementById(
-      "reloadBtn"
-    );
+    const reloadButton =
+      document.getElementById(
+        "reloadBtn"
+      );
 
-    const toggleButton = document.getElementById(
-      "toggleView"
-    );
+    const toggleButton =
+      document.getElementById(
+        "toggleView"
+      );
 
-    const printButton = document.getElementById(
-      "printBtn"
-    );
+    const printButton =
+      document.getElementById(
+        "printBtn"
+      );
 
-    const statusElement = document.getElementById(
-      "saveStatus"
-    );
+    const statusElement =
+      document.getElementById(
+        "saveStatus"
+      );
 
-    if (!tripId) {
-      if (statusElement) {
-        statusElement.textContent = "Липсва Trip ID.";
+    if (
+      !tripId
+    ) {
+      if (
+        statusElement
+      ) {
+        statusElement.textContent =
+          "Липсва Trip ID.";
       }
 
       return;
     }
 
     try {
-      await reloadPassengers(false);
-    } catch (error) {
-      console.error(error);
-
-      if (statusElement) {
-        statusElement.textContent = (
-          "Грешка при зареждане: " +
-          String(error.message || error)
-        );
-      }
-
-      const tbody = document.getElementById(
-        "rowsDriver"
+      await reloadPassengers(
+        false
+      );
+    } catch (
+      error
+    ) {
+      console.error(
+        error
       );
 
-      if (tbody) {
+      if (
+        statusElement
+      ) {
+        statusElement.textContent =
+          (
+            "Грешка при зареждане: " +
+            String(
+              error.message ||
+              error
+            )
+          );
+      }
+
+      const tbody =
+        document.getElementById(
+          "rowsDriver"
+        );
+
+      if (
+        tbody
+      ) {
         tbody.innerHTML = `
           <tr>
             <td
               colspan="9"
               style="padding:16px 8px;color:#b91c1c;">
               Грешка при зареждане:
-              ${escapeHtml(error.message || error)}
+              ${escapeHtml(
+                error.message ||
+                error
+              )}
             </td>
           </tr>
         `;
@@ -2393,15 +3075,27 @@
       "click",
       async () => {
         try {
-          await reloadPassengers(true);
-        } catch (error) {
-          console.error(error);
+          await reloadPassengers(
+            true
+          );
+        } catch (
+          error
+        ) {
+          console.error(
+            error
+          );
 
-          if (statusElement) {
-            statusElement.textContent = (
-              "Грешка при обновяване: " +
-              String(error.message || error)
-            );
+          if (
+            statusElement
+          ) {
+            statusElement.textContent =
+              (
+                "Грешка при обновяване: " +
+                String(
+                  error.message ||
+                  error
+                )
+              );
           }
         }
       }
@@ -2417,7 +3111,7 @@
       rerenderGlobal
     );
 
-    onlyUnpaidInput?.addEventListener(
+    onlyCashPendingInput?.addEventListener(
       "change",
       rerenderGlobal
     );
@@ -2425,9 +3119,10 @@
     toggleButton?.addEventListener(
       "click",
       () => {
-        view = view === "table"
-          ? "cards"
-          : "table";
+        view =
+          view === "table"
+            ? "cards"
+            : "table";
 
         rerenderGlobal();
       }
@@ -2449,17 +3144,20 @@
 
     /*
       Live reload през 20 секунди.
-      Не прекъсва работата на шофьора и не променя активния филтър.
+      Филтърът и избраният view остават непроменени.
     */
     setInterval(
       () => {
-        reloadPassengers(false)
-          .catch((error) => {
+        reloadPassengers(
+          false
+        ).catch(
+          (error) => {
             console.error(
               "Automatic reload failed",
               error
             );
-          });
+          }
+        );
       },
       20000
     );
@@ -2467,14 +3165,19 @@
     document.addEventListener(
       "visibilitychange",
       () => {
-        if (!document.hidden) {
-          reloadPassengers(false)
-            .catch((error) => {
+        if (
+          !document.hidden
+        ) {
+          reloadPassengers(
+            false
+          ).catch(
+            (error) => {
               console.error(
                 "Visibility reload failed",
                 error
               );
-            });
+            }
+          );
         }
       }
     );

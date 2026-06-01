@@ -4226,19 +4226,26 @@ def _build_trip_portal_overlay(
     passengers: list[TripPassenger],
 ) -> dict[int, dict]:
     """
-    Overlay за trips/trips_detail:
-    - seatNo идва от final BookingSeat
-    - paymentApproved идва от Booking.payment_status == 'paid'
+    Overlay за trips / driver view.
 
-    ВАЖНО:
-    Работи и ако TripPassenger.booking_id липсва,
-    стига да може да се извади Unique ID от реда.
+    Подаваме към frontend:
+      - актуалното място от BookingSeat
+      - дали online плащането е потвърдено
+      - payment method
+      - дали резервацията е CASH
+      - общата сума и валутата на booking-а
+
+    Работи и когато TripPassenger.booking_id липсва,
+    ако Unique ID може да бъде намерен в passenger row.
     """
     overlay: dict[int, dict] = {}
 
     if not passengers:
         return overlay
 
+    # -------------------------------------------------------
+    # 1) Директно свързани bookings чрез booking_id
+    # -------------------------------------------------------
     direct_booking_ids = sorted({
         int(p.booking_id)
         for p in passengers
@@ -4246,89 +4253,199 @@ def _build_trip_portal_overlay(
     })
 
     booking_by_id: dict[int, Booking] = {}
+
     if direct_booking_ids:
         direct_bookings = (
             db.query(Booking)
             .filter(Booking.id.in_(direct_booking_ids))
             .all()
         )
-        booking_by_id = {int(b.id): b for b in direct_bookings}
 
-    passenger_ext_map: dict[int, str] = {}
-    ext_keys: set[str] = set()
+        booking_by_id = {
+            int(booking.id): booking
+            for booking in direct_bookings
+        }
 
-    for p in passengers:
-        ext_key = _trip_passenger_external_id_key(
-            p,
+    # -------------------------------------------------------
+    # 2) Опит за връзка чрез external_id
+    # -------------------------------------------------------
+    passenger_external_id_map: dict[int, str] = {}
+    external_ids: set[str] = set()
+
+    for passenger in passengers:
+        external_id = _trip_passenger_external_id_key(
+            passenger,
             booking_by_id=booking_by_id,
         )
-        if ext_key:
-            passenger_ext_map[int(p.id)] = ext_key
-            ext_keys.add(ext_key)
 
-    if not ext_keys:
+        if not external_id:
+            continue
+
+        external_id = str(external_id).strip()
+
+        if not external_id:
+            continue
+
+        passenger_external_id_map[int(passenger.id)] = external_id
+        external_ids.add(external_id)
+
+    booking_by_external_id: dict[str, Booking] = {}
+
+    if external_ids:
+        matched_bookings = (
+            db.query(Booking)
+            .filter(cast(Booking.external_id, String).in_(list(external_ids)))
+            .all()
+        )
+
+        for booking in matched_bookings:
+            external_id = _booking_external_id_key(booking)
+
+            if external_id and external_id not in booking_by_external_id:
+                booking_by_external_id[external_id] = booking
+
+    # -------------------------------------------------------
+    # 3) Определяме booking за всеки passenger
+    # -------------------------------------------------------
+    passenger_booking_map: dict[int, Booking] = {}
+
+    for passenger in passengers:
+        passenger_id = int(passenger.id)
+        booking = None
+
+        if getattr(passenger, "booking_id", None):
+            booking = booking_by_id.get(int(passenger.booking_id))
+
+        if not booking:
+            external_id = passenger_external_id_map.get(passenger_id)
+
+            if external_id:
+                booking = booking_by_external_id.get(external_id)
+
+        if booking:
+            passenger_booking_map[passenger_id] = booking
+
+    if not passenger_booking_map:
         return overlay
 
-    matched_bookings = (
-        db.query(Booking)
-        .filter(cast(Booking.external_id, String).in_(list(ext_keys)))
-        .all()
-    )
+    # -------------------------------------------------------
+    # 4) Final seats за bookings
+    # -------------------------------------------------------
+    all_booking_ids = sorted({
+        int(booking.id)
+        for booking in passenger_booking_map.values()
+    })
 
-    booking_by_ext: dict[str, Booking] = {}
-    for b in matched_bookings:
-        ext_key = _booking_external_id_key(b)
-        if ext_key and ext_key not in booking_by_ext:
-            booking_by_ext[ext_key] = b
-
-    booking_ids = [int(b.id) for b in booking_by_ext.values()]
     seats_by_booking_id: dict[int, list[str]] = {}
 
-    if booking_ids:
+    if all_booking_ids:
         seat_rows = (
-            db.query(BookingSeat.booking_id, BookingSeat.seat_no)
+            db.query(
+                BookingSeat.booking_id,
+                BookingSeat.seat_no,
+            )
             .filter(
-                BookingSeat.booking_id.in_(booking_ids),
+                BookingSeat.booking_id.in_(all_booking_ids),
                 BookingSeat.is_final == True,
                 BookingSeat.seat_no.isnot(None),
             )
-            .order_by(BookingSeat.booking_id.asc(), BookingSeat.id.asc())
+            .order_by(
+                BookingSeat.booking_id.asc(),
+                BookingSeat.id.asc(),
+            )
             .all()
         )
 
         for booking_id, seat_no in seat_rows:
             if booking_id is None or not seat_no:
                 continue
-            seats_by_booking_id.setdefault(int(booking_id), []).append(str(seat_no).strip())
 
-    grouped_passengers: dict[str, list[TripPassenger]] = {}
-    for p in passengers:
-        ext_key = passenger_ext_map.get(int(p.id))
-        if ext_key:
-            grouped_passengers.setdefault(ext_key, []).append(p)
+            seat_value = str(seat_no).strip()
 
-    for ext_key, pax_rows in grouped_passengers.items():
-        booking = booking_by_ext.get(ext_key)
+            if not seat_value:
+                continue
+
+            seats_by_booking_id.setdefault(
+                int(booking_id),
+                [],
+            ).append(seat_value)
+
+    # -------------------------------------------------------
+    # 5) Групиране на passengers по booking
+    # -------------------------------------------------------
+    passengers_by_booking_id: dict[int, list[TripPassenger]] = {}
+
+    for passenger in passengers:
+        booking = passenger_booking_map.get(int(passenger.id))
+
         if not booking:
             continue
 
-        final_seats = seats_by_booking_id.get(int(booking.id), [])
-        pax_rows_sorted = sorted(pax_rows, key=_trip_passenger_sort_key)
-        paid_flag = (getattr(booking, "payment_status", None) == "paid")
+        passengers_by_booking_id.setdefault(
+            int(booking.id),
+            [],
+        ).append(passenger)
 
-        for idx, p in enumerate(pax_rows_sorted):
-            ov: dict = {}
+    # -------------------------------------------------------
+    # 6) Overlay payload
+    # -------------------------------------------------------
+    for booking_id, passenger_rows in passengers_by_booking_id.items():
+        booking = None
 
-            if idx < len(final_seats):
-                ov["seatNo"] = final_seats[idx]
+        for candidate in passenger_booking_map.values():
+            if int(candidate.id) == int(booking_id):
+                booking = candidate
+                break
 
-            if paid_flag:
-                ov["paymentApproved"] = True
+        if not booking:
+            continue
 
-            overlay[int(p.id)] = ov
+        final_seats = seats_by_booking_id.get(booking_id, [])
+
+        passenger_rows = sorted(
+            passenger_rows,
+            key=_trip_passenger_sort_key,
+        )
+
+        payment_method = _norm_payment_method(
+            getattr(booking, "payment_method", None)
+        )
+
+        payment_status = (
+            str(getattr(booking, "payment_status", None) or "")
+            .strip()
+            .lower()
+        )
+
+        booking_currency = (
+            str(getattr(booking, "currency", None) or "EUR")
+            .strip()
+            .upper()
+        )
+
+        booking_total = None
+
+        if getattr(booking, "total", None) is not None:
+            try:
+                booking_total = float(booking.total)
+            except Exception:
+                booking_total = None
+
+        for index, passenger in enumerate(passenger_rows):
+            passenger_overlay = {
+                "paymentApproved": payment_status == "paid",
+                "paymentMethod": payment_method,
+                "cashRequired": payment_method == "cash",
+                "bookingTotal": booking_total,
+                "bookingCurrency": booking_currency,
+            }
+
+            if index < len(final_seats):
+                passenger_overlay["seatNo"] = final_seats[index]
+
+            overlay[int(passenger.id)] = passenger_overlay
 
     return overlay
-
 
 def _driver_manifest_path(trip_id: int) -> Path:
     return DRIVER_MANIFESTS_DIR / f"trip_{int(trip_id)}.json"
@@ -4662,8 +4779,35 @@ def _build_driver_trip_live_payload(db: Session, trip_id: int) -> dict:
         if seat_override:
             item["seatNo"] = seat_override
 
-        item["paymentApproved"] = bool(ov.get("paymentApproved"))
-        item["paymentBadgeLabel"] = "PAYMENT APPROVED" if item["paymentApproved"] else ""
+        item["paymentBadgeLabel"] = (
+            "PAYMENT APPROVED"
+            if item["paymentApproved"]
+            else ""
+        )
+
+        item["paymentMethod"] = (
+            str(ov.get("paymentMethod") or "")
+            .strip()
+            .lower()
+        )
+
+        item["cashRequired"] = bool(
+            ov.get("cashRequired")
+        )
+
+        item["bookingTotal"] = ov.get(
+            "bookingTotal"
+        )
+
+        item["bookingCurrency"] = (
+            str(
+                ov.get("bookingCurrency")
+                or item.get("currency")
+                or "EUR"
+            )
+            .strip()
+            .upper()
+        )
 
         state = boarding_state_map.get(int(p.id), {})
         item["boardingStatus"] = state.get("boarding_status") or ("checked_in" if item.get("checkedIn") else "pending")
@@ -6055,29 +6199,42 @@ def drivers_scan_action(
 
         if not raw_amount:
             return RedirectResponse(
-                url=f"/drivers/scan?trip_id={resolved_trip_id}&err=cash_amount_missing",
+                url=f"/drivers/scan?err=cash_amount_missing&trip_id={passenger.trip_id}",
                 status_code=303,
             )
 
         try:
-            parsed_amount = float(
+            parsed_amount = Decimal(
                 raw_amount.replace(",", ".")
-            )
-        except Exception:
+            ).quantize(Decimal("0.01"))
+        except (InvalidOperation, ValueError, TypeError):
             return RedirectResponse(
-                url=f"/drivers/scan?trip_id={resolved_trip_id}&err=cash_amount_invalid",
+                url=f"/drivers/scan?err=cash_amount_invalid&trip_id={passenger.trip_id}",
+                status_code=303,
+            )
+
+        if parsed_amount <= 0:
+            return RedirectResponse(
+                url=f"/drivers/scan?err=cash_amount_invalid&trip_id={passenger.trip_id}",
                 status_code=303,
             )
 
         passenger.paid = True
-        passenger.amount = parsed_amount
+        passenger.checked_in = True
+        passenger.amount = float(parsed_amount)
         passenger.currency = (
-            (cash_currency or "EUR").upper().strip()
+            (cash_currency or "EUR")
+            .upper()
+            .strip()
             or "EUR"
         )
 
-        cash_collected_amount = parsed_amount
+        boarding_status = "checked_in"
+        refused_reason_value = None
+
+        cash_collected_amount = float(parsed_amount)
         cash_collected_currency = passenger.currency
+
 
     elif action in {"check_oebb", "oebb"}:
         passenger.oebb = True

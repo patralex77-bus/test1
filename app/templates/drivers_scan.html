@@ -82,6 +82,72 @@
           <div class="text-xs font-black uppercase tracking-wide text-amber-700">
             Сума за касиране от пътника
           </div>
+<form
+  method="post"
+  action="/drivers/scan/action"
+  class="mt-4 space-y-3">
+
+  <input
+    type="hidden"
+    name="action"
+    value="collect_cash">
+
+  <input
+    type="hidden"
+    name="trip_id"
+    value="{{ active_trip_id or result.scan.trip_id or '' }}">
+
+  <input
+    type="hidden"
+    name="qr_payload"
+    value="{{ payload_text or '' }}">
+
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_120px]">
+    <div>
+      <label class="block text-xs font-black uppercase tracking-wide text-amber-700">
+        Касирана сума
+      </label>
+
+      <input
+        type="number"
+        name="cash_amount"
+        step="0.01"
+        min="0.01"
+        value="{{ result.scan.cash_amount or '' }}"
+        required
+        class="mt-1 w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-lg font-black text-slate-900">
+    </div>
+
+    <div>
+      <label class="block text-xs font-black uppercase tracking-wide text-amber-700">
+        Валута
+      </label>
+
+      <select
+        name="cash_currency"
+        class="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-lg font-black text-slate-900">
+
+        <option
+          value="EUR"
+          {% if result.scan.cash_currency == "EUR" %}selected{% endif %}>
+          EUR
+        </option>
+
+        <option
+          value="UAH"
+          {% if result.scan.cash_currency == "UAH" %}selected{% endif %}>
+          UAH
+        </option>
+      </select>
+    </div>
+  </div>
+
+  <button
+    type="submit"
+    class="inline-flex min-h-[64px] w-full items-center justify-center rounded-2xl bg-amber-500 px-5 py-4 text-lg font-black text-white shadow-sm hover:bg-amber-600 active:scale-[0.99]">
+    Касирано — запиши пътника
+  </button>
+</form>
 
           <div class="mt-2 text-4xl font-black text-amber-900">
             {% if result.scan.cash_amount %}
