@@ -5616,28 +5616,40 @@ def admin_bookings_list_page(
     )
 
 
-@app.get("/admin/bookings", response_class=HTMLResponse)
-def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db)):
-    r = _ensure_admin_or_redirect(request)
-    if r:
-        return r
+def _admin_bookings_dashboard_stats(db: Session) -> dict:
+    """
+    Live статистика за горните dashboard контейнери.
 
-    total_bookings = int(db.query(func.count(Booking.id)).scalar() or 0)
+    New today означава bookings, създадени днес:
+      00:00:00 - 23:59:59
+    по локалното време Europe/Vienna.
+    """
+    today_start = _vienna_now_naive().replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    today_end = today_start + timedelta(days=1)
+
+    total_bookings = int(
+        db.query(func.count(Booking.id)).scalar()
+        or 0
+    )
+
     total_paid = int(
         db.query(func.count(Booking.id))
         .filter(Booking.payment_status == "paid")
         .scalar()
         or 0
     )
+
     total_pending_review = int(
         db.query(func.count(Booking.id))
         .filter(Booking.payment_status == "pending_review")
         .scalar()
         or 0
     )
-
-    today_start = _vienna_now_naive().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
 
     total_today_bookings = int(
         db.query(func.count(Booking.id))
@@ -5646,7 +5658,47 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
         .filter(Booking.created_at < today_end)
         .scalar()
         or 0
-    ) 
+    )
+
+    return {
+        "total_bookings": total_bookings,
+        "total_paid": total_paid,
+        "total_pending_review": total_pending_review,
+        "total_today_bookings": total_today_bookings,
+        "updated_at": _vienna_now_naive().strftime("%d.%m.%Y %H:%M:%S"),
+    }
+
+
+@app.get("/admin/bookings/dashboard-stats")
+def admin_bookings_dashboard_stats_api(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    JSON endpoint за автоматично обновяване на контейнерите
+    без презареждане на страницата.
+    """
+    r = _ensure_admin_or_redirect(request)
+    if r:
+        raise HTTPException(status_code=401, detail="Admin only")
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "stats": _admin_bookings_dashboard_stats(db),
+        },
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        },
+    )
+
+@app.get("/admin/bookings", response_class=HTMLResponse)
+def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db)):
+    r = _ensure_admin_or_redirect(request)
+    if r:
+        return r
+
+    stats = _admin_bookings_dashboard_stats(db)
 
     total_pending_cancellations = int(
         db.query(func.count(BookingCancellation.id))
@@ -6063,12 +6115,7 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
         "admin/bookings_dashboard.html",
         {
             "section": "dashboard",
-            "stats": {
-                "total_bookings": total_bookings,
-                "total_paid": total_paid,
-                "total_pending_review": total_pending_review,
-                "total_today_bookings": total_today_bookings,
-            },
+            "stats": stats,
             "recent_bookings": recent_bookings,
             "critical": {
                 "bank_paypal_missing_proof_le_72": bank_paypal_missing_proof_le_72,
@@ -6083,6 +6130,264 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
         },
     )
 
+
+def _decorate_admin_booking_category_rows(
+    db: Session,
+    bookings: list[Booking],
+) -> None:
+    """
+    Добавя display-only полета към booking редовете:
+      - final seats
+      - passenger count
+      - linked passengers
+      - payment proof count
+      - linked trip
+    """
+    if not bookings:
+        return
+
+    booking_ids = [
+        int(b.id)
+        for b in bookings
+        if getattr(b, "id", None) is not None
+    ]
+
+    if not booking_ids:
+        return
+
+    final_seats_map: dict[int, list[str]] = {}
+    linked_pax_count_map: dict[int, int] = {}
+    qty_sum_map: dict[int, int] = {}
+    proof_count_map: dict[int, int] = {}
+
+    final_seat_rows = (
+        db.query(
+            BookingSeat.booking_id,
+            BookingSeat.seat_no,
+        )
+        .filter(
+            BookingSeat.booking_id.in_(booking_ids),
+            BookingSeat.is_final == True,
+            BookingSeat.seat_no.isnot(None),
+        )
+        .order_by(
+            BookingSeat.booking_id.asc(),
+            BookingSeat.id.asc(),
+        )
+        .all()
+    )
+
+    for booking_id, seat_no in final_seat_rows:
+        if booking_id is None:
+            continue
+
+        seat_str = str(seat_no or "").strip()
+        if not seat_str:
+            continue
+
+        final_seats_map.setdefault(int(booking_id), []).append(seat_str)
+
+    for booking_id in list(final_seats_map.keys()):
+        unique_seats = list(dict.fromkeys(final_seats_map[booking_id]))
+        unique_seats.sort(key=_seat_sort_key)
+        final_seats_map[booking_id] = unique_seats
+
+    linked_pax_rows = (
+        db.query(
+            TripPassenger.booking_id,
+            func.count(TripPassenger.id),
+        )
+        .filter(
+            TripPassenger.booking_id.in_(booking_ids),
+            TripPassenger.booking_id.isnot(None),
+        )
+        .group_by(TripPassenger.booking_id)
+        .all()
+    )
+
+    linked_pax_count_map = {
+        int(booking_id): int(count or 0)
+        for booking_id, count in linked_pax_rows
+        if booking_id is not None
+    }
+
+    qty_rows = (
+        db.query(
+            BookingTicketLine.booking_id,
+            func.coalesce(func.sum(BookingTicketLine.qty), 0),
+        )
+        .filter(BookingTicketLine.booking_id.in_(booking_ids))
+        .group_by(BookingTicketLine.booking_id)
+        .all()
+    )
+
+    qty_sum_map = {
+        int(booking_id): int(total_qty or 0)
+        for booking_id, total_qty in qty_rows
+        if booking_id is not None
+    }
+
+    proof_rows = (
+        db.query(
+            PaymentProof.booking_id,
+            func.count(PaymentProof.id),
+        )
+        .filter(PaymentProof.booking_id.in_(booking_ids))
+        .group_by(PaymentProof.booking_id)
+        .all()
+    )
+
+    proof_count_map = {
+        int(booking_id): int(count or 0)
+        for booking_id, count in proof_rows
+        if booking_id is not None
+    }
+
+    trip_ids = sorted({
+        int(b.trip_id)
+        for b in bookings
+        if getattr(b, "trip_id", None)
+    })
+
+    trip_by_id: dict[int, Trip] = {}
+
+    if trip_ids:
+        trips = (
+            db.query(Trip)
+            .filter(Trip.id.in_(trip_ids))
+            .all()
+        )
+        trip_by_id = {
+            int(trip.id): trip
+            for trip in trips
+        }
+
+    for booking in bookings:
+        booking_id = int(booking.id)
+
+        final_seats = final_seats_map.get(booking_id, [])
+        linked_pax_count = int(linked_pax_count_map.get(booking_id, 0) or 0)
+        ticket_qty = int(qty_sum_map.get(booking_id, 0) or 0)
+        proof_count = int(proof_count_map.get(booking_id, 0) or 0)
+
+        if ticket_qty > 0:
+            passenger_count = ticket_qty
+        elif linked_pax_count > 0:
+            passenger_count = linked_pax_count
+        elif len(final_seats) > 0:
+            passenger_count = len(final_seats)
+        else:
+            passenger_count = 1
+
+            for attr in ("passenger_count", "pax_count", "seats_count", "qty"):
+                value = getattr(booking, attr, None)
+
+                try:
+                    if value is not None and int(value) > 0:
+                        passenger_count = int(value)
+                        break
+                except Exception:
+                    pass
+
+        booking._category_final_seats = final_seats
+        booking._category_final_seats_str = ", ".join(final_seats) if final_seats else "—"
+        booking._category_linked_pax_count = linked_pax_count
+        booking._category_passenger_count = passenger_count
+        booking._category_payment_proof_count = proof_count
+        booking._category_trip = trip_by_id.get(int(booking.trip_id)) if booking.trip_id else None
+
+
+@app.get("/admin/bookings/category/{category_key}", response_class=HTMLResponse)
+def admin_bookings_category_page(
+    category_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Една обща страница за:
+      /admin/bookings/category/all
+      /admin/bookings/category/paid
+      /admin/bookings/category/pending-review
+      /admin/bookings/category/new-today
+    """
+    r = _ensure_admin_or_redirect(request)
+    if r:
+        return r
+
+    category_key = str(category_key or "").strip().lower()
+
+    categories = {
+        "all": {
+            "title": "Total bookings",
+            "description": "All imported and manually created bookings.",
+        },
+        "paid": {
+            "title": "Paid bookings",
+            "description": "Bookings with approved payment status.",
+        },
+        "pending-review": {
+            "title": "Pending review",
+            "description": "Bookings with uploaded payment proof awaiting admin review.",
+        },
+        "new-today": {
+            "title": "New today",
+            "description": "Bookings created today between 00:00 and 24:00 Europe/Vienna.",
+        },
+    }
+
+    category = categories.get(category_key)
+    if not category:
+        raise HTTPException(status_code=404, detail="Unknown booking category")
+
+    query = db.query(Booking)
+
+    if category_key == "paid":
+        query = query.filter(Booking.payment_status == "paid")
+
+    elif category_key == "pending-review":
+        query = query.filter(Booking.payment_status == "pending_review")
+
+    elif category_key == "new-today":
+        today_start = _vienna_now_naive().replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        today_end = today_start + timedelta(days=1)
+
+        query = (
+            query
+            .filter(Booking.created_at.isnot(None))
+            .filter(Booking.created_at >= today_start)
+            .filter(Booking.created_at < today_end)
+        )
+
+    bookings = (
+        query
+        .order_by(
+            Booking.created_at.desc(),
+            Booking.id.desc(),
+        )
+        .all()
+    )
+
+    _decorate_admin_booking_category_rows(db, bookings)
+
+    return templates.TemplateResponse(
+        request,
+        "admin/bookings_category.html",
+        {
+            "section": "category",
+            "category_key": category_key,
+            "category_title": category["title"],
+            "category_description": category["description"],
+            "bookings": bookings,
+            "category_count": len(bookings),
+            "stats": _admin_bookings_dashboard_stats(db),
+            "generated_at": _vienna_now_naive().strftime("%d.%m.%Y %H:%M:%S"),
+        },
+    )
 
 @app.get("/admin/bookings/{booking_id}", response_class=HTMLResponse)
 def admin_booking_detail_page(
