@@ -1,175 +1,182 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="topbar" style="display:flex;align-items:flex-start;gap:12px;margin-bottom:10px;">
-  <div class="title">
-    <div style="font-weight:900;font-size:16px;line-height:1;">Шофьори</div>
-    <div style="color:#666;margin-top:4px;">Само рейсове с Freigabe (окончателни)</div>
+<div class="mx-auto max-w-6xl">
+  <div class="mb-5 flex items-start gap-3">
+    <div>
+      <h1 class="text-xl font-black tracking-tight text-slate-900">
+        Рейсове за шофьора
+      </h1>
+
+      <p class="mt-1 text-sm text-slate-500">
+        Показват се само активните рейсове за вчера, днес и утре.
+        Информацията се обновява директно от системата и не изисква Freigabe.
+      </p>
+    </div>
+
+    <form method="post" action="/drivers/logout" class="ml-auto">
+      <button
+        type="submit"
+        class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">
+        Logout
+      </button>
+    </form>
   </div>
 
-  <form method="post" action="/drivers/logout" style="margin-left:auto;">
-    <button class="btn" type="submit">Logout</button>
-  </form>
-</div>
-
-<div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-  <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-    <div class="flex items-center justify-between">
-      <button id="calPrev" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold active:scale-[0.99]">←</button>
-      <div class="text-sm font-semibold text-slate-800" id="calTitle">—</div>
-      <button id="calNext" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold active:scale-[0.99]">→</button>
+  <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+      Избери дата
     </div>
 
-    <div class="mt-3 grid grid-cols-7 gap-2 text-xs font-semibold text-slate-500">
-      <div class="text-center">Пн</div>
-      <div class="text-center">Вт</div>
-      <div class="text-center">Ср</div>
-      <div class="text-center">Чт</div>
-      <div class="text-center">Пт</div>
-      <div class="text-center">Сб</div>
-      <div class="text-center">Нд</div>
-    </div>
-
-    <div class="mt-2 grid grid-cols-7 gap-2" id="calGrid"></div>
-
-    <div class="mt-3 text-xs text-slate-500">
-      • Дните с рейс имат малка точка. • Избраният ден е маркиран.
+    <div
+      id="dateTabs"
+      class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
     </div>
   </div>
 
-  <div class="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-    <div class="flex items-center justify-between">
-      <div class="text-sm font-semibold text-slate-800">Рейсове за деня</div>
-      <div class="text-xs text-slate-500" id="dayHint">—</div>
+  <div class="mt-5">
+    <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div>
+        <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+          Активни рейсове
+        </div>
+
+        <div
+          id="selectedDateTitle"
+          class="mt-1 text-lg font-black text-slate-900">
+          —
+        </div>
+      </div>
+
+      <div
+        id="tripCountBadge"
+        class="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">
+        0 рейса
+      </div>
     </div>
 
-    <div class="mt-3 space-y-3" id="dayTripsWrap"></div>
-
-    <div class="mt-3 text-xs text-slate-500">
-      Избери ден от календара, за да видиш наличните рейсове и да отвориш списъка.
+    <div
+      id="directionGrid"
+      class="grid grid-cols-1 gap-4 lg:grid-cols-2">
     </div>
+
+    <div
+      id="otherTripsWrap"
+      class="mt-4 hidden">
+    </div>
+  </div>
+
+  <div
+    id="tripDetailsWrap"
+    class="mt-5 hidden">
   </div>
 </div>
 
 <style>
-  .cal-day{
-    height:46px;
-    border:1px solid #e2e8f0;
-    border-radius:14px;
-    background:#fff;
-    padding:6px 8px;
-    font-size:13px;
-    color:#0f172a;
-    user-select:none;
-    position:relative;
-    cursor:pointer;
+  .driver-date-button {
+    width: 100%;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    background: #ffffff;
+    padding: 14px;
+    text-align: left;
+    cursor: pointer;
+    transition: 0.15s ease;
   }
 
-  .cal-day.muted{
-    color:#94a3b8;
-    background:#fafafa;
+  .driver-date-button:hover {
+    background: #f8fafc;
   }
 
-  .cal-day.selected{
-    outline:2px solid #0f172a;
-    outline-offset:1px;
-    background:#eef2ff;
-    border-color:#c7d2fe;
+  .driver-date-button.active {
+    border-color: #0f172a;
+    background: #f8fafc;
+    box-shadow: 0 0 0 2px #0f172a;
   }
 
-  .cal-day .daynum{
-    position:absolute;
-    top:6px;
-    right:8px;
-    font-weight:400;
-    line-height:1;
+  .direction-box {
+    min-height: 190px;
+    border: 1px solid #e2e8f0;
+    border-radius: 18px;
+    background: #ffffff;
+    padding: 16px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   }
 
-  .cal-day .dot{
-    position:absolute;
-    bottom:8px;
-    left:8px;
-    width:8px;
-    height:8px;
-    border-radius:999px;
-    background:#0f172a;
-    opacity:.75;
+  .direction-box.ua-at {
+    border-top: 4px solid #2563eb;
   }
 
-  .tripCard{
-    border:1px solid #e2e8f0;
-    border-radius:16px;
-    padding:12px;
-    background:#fff;
+  .direction-box.at-ua {
+    border-top: 4px solid #dc2626;
   }
 
-  .badge{
-    display:inline-flex;
-    align-items:center;
-    gap:8px;
-    padding:6px 10px;
-    border-radius:999px;
-    border:1px solid #e2e8f0;
-    background:#f8fafc;
-    font-size:12px;
-    font-weight:800;
-    color:#0f172a;
+  .direction-box.other {
+    border-top: 4px solid #64748b;
   }
 
-  .tripMeta{
-    margin-top:8px;
-    display:flex;
-    gap:12px;
-    flex-wrap:wrap;
-    font-size:12px;
-    color:#64748b;
+  .trip-choice {
+    width: 100%;
+    display: block;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    background: #ffffff;
+    padding: 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: 0.15s ease;
   }
 
-  .openBtn{
-    margin-top:10px;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    border:1px solid #e2e8f0;
-    border-radius:12px;
-    padding:10px 12px;
-    font-weight:900;
-    background:#fff;
-    cursor:pointer;
-    text-decoration:none;
-    color:#0f172a;
+  .trip-choice:hover {
+    border-color: #94a3b8;
+    background: #f8fafc;
   }
 
-  .openBtn:active{
-    transform:scale(0.99);
+  .trip-choice.active {
+    border-color: #0f172a;
+    background: #f8fafc;
+    box-shadow: 0 0 0 2px #0f172a;
+  }
+
+  .details-card {
+    border: 1px solid #cbd5e1;
+    border-radius: 18px;
+    background: #ffffff;
+    padding: 18px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  }
+
+  .details-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  @media (min-width: 768px) {
+    .details-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  .details-item {
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    background: #f8fafc;
+    padding: 12px;
   }
 </style>
 
 <script>
+(function () {
+  const ACTIVE_DAYS = {{ (active_days | default([], true)) | tojson }};
   const TRIPS = {{ (trips_data | default([], true)) | tojson }};
+  const TODAY = {{ (today | default("")) | tojson }};
 
-  const tripDateSet = new Set();
-  for (const t of TRIPS){
-    if (t.date) tripDateSet.add(t.date);
-  }
+  let selectedDate = TODAY;
+  let selectedTripId = null;
 
-  function ymd(dt){
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, "0");
-    const d = String(dt.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-
-  function startOfCalendarMonth(year, monthIndex){
-    const first = new Date(year, monthIndex, 1);
-    const dow = (first.getDay() + 6) % 7;
-    const start = new Date(year, monthIndex, 1 - dow);
-    start.setHours(0, 0, 0, 0);
-    return start;
-  }
-
-  function esc(s){
-    return String(s ?? "")
+  function esc(value) {
+    return String(value ?? "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
@@ -177,114 +184,370 @@
       .replaceAll("'", "&#039;");
   }
 
-  function renderCalendar(viewDate){
-    const grid = document.getElementById("calGrid");
-    const title = document.getElementById("calTitle");
-    if (!grid || !title) return;
-
-    const year = viewDate.getFullYear();
-    const month = viewDate.getMonth();
-    const monthName = viewDate.toLocaleString("bg-BG", { month: "long", year: "numeric" });
-    title.textContent = monthName.charAt(0).toUpperCase() + monthName.slice(1);
-
-    grid.innerHTML = "";
-
-    const start = startOfCalendarMonth(year, month);
-    const selected = window.__SELECTED_DATE__ || "";
-
-    for (let i = 0; i < 42; i++){
-      const day = new Date(start);
-      day.setDate(start.getDate() + i);
-
-      const inMonth = day.getMonth() === month;
-      const key = ymd(day);
-      const hasTrip = tripDateSet.has(key);
-
-      const cell = document.createElement("button");
-      cell.type = "button";
-      cell.className = "cal-day" + (inMonth ? "" : " muted") + (selected === key ? " selected" : "");
-      cell.innerHTML = `<div class="daynum">${day.getDate()}</div>${hasTrip ? `<div class="dot"></div>` : ``}`;
-
-      cell.addEventListener("click", () => {
-        window.__SELECTED_DATE__ = key;
-        renderCalendar(viewDate);
-        renderTripsForDay(key);
-      });
-
-      grid.appendChild(cell);
-    }
+  function tripsForSelectedDate() {
+    return TRIPS.filter((trip) => trip.date === selectedDate);
   }
 
-  function sortTripsForDay(list){
-    const rank = (dir) => dir === "IK" ? 0 : (dir === "KI" ? 1 : 2);
-    return list
-      .slice()
-      .sort((a, b) => rank(a.dir) - rank(b.dir) || String(a.time || "").localeCompare(String(b.time || "")));
+  function findSelectedTrip() {
+    return TRIPS.find((trip) => {
+      return (
+        trip.date === selectedDate &&
+        Number(trip.id) === Number(selectedTripId)
+      );
+    }) || null;
   }
 
-  function renderTripsForDay(dateStr){
-    const wrap = document.getElementById("dayTripsWrap");
-    const hint = document.getElementById("dayHint");
+  function renderDateTabs() {
+    const wrap = document.getElementById("dateTabs");
+
     if (!wrap) return;
 
-    if (hint) hint.textContent = dateStr || "—";
+    wrap.innerHTML = ACTIVE_DAYS.map((day) => {
+      const count = TRIPS.filter((trip) => trip.date === day.date).length;
+      const activeClass = day.date === selectedDate ? " active" : "";
 
-    if (!dateStr){
-      wrap.innerHTML = `<div class="text-sm text-slate-500">Избери дата от календара.</div>`;
-      return;
-    }
+      return `
+        <button
+          type="button"
+          class="driver-date-button${activeClass}"
+          data-date="${esc(day.date)}">
 
-    const tripsForDay = sortTripsForDay(TRIPS.filter(t => t.date === dateStr));
+          <div class="flex items-center justify-between gap-2">
+            <div>
+              <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+                ${esc(day.relative_label)}
+              </div>
 
-    if (tripsForDay.length === 0){
-      wrap.innerHTML = `<div class="text-sm text-slate-500">Няма рейсове за избраната дата.</div>`;
-      return;
-    }
+              <div class="mt-1 text-base font-black text-slate-900">
+                ${esc(day.date_label)}
+              </div>
+            </div>
 
-    wrap.innerHTML = "";
-
-    for (const t of tripsForDay){
-      const label = t.label || `${t.from || "?"} → ${t.to || "?"}`;
-
-      wrap.insertAdjacentHTML("beforeend", `
-        <div class="tripCard">
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <div class="badge">${esc(label)}</div>
-            <div style="font-size:12px;color:#64748b;font-weight:800;">Курс #${t.id}</div>
+            <div class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-black text-slate-700">
+              ${count}
+            </div>
           </div>
+        </button>
+      `;
+    }).join("");
 
-          <div class="tripMeta">
-            <div>Час: <span style="font-weight:900;color:#0f172a">${esc(t.time || "—")}</span></div>
-            <div>Пътници: <span style="font-weight:900;color:#0f172a">${Number(t.total || 0)}</span></div>
-            ${Number(t.missing || 0) > 0 ? `<div>Липсват: <span style="font-weight:900;color:#991b1b">${Number(t.missing || 0)}</span></div>` : ``}
-          </div>
+    wrap.querySelectorAll("[data-date]").forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedDate = button.dataset.date || TODAY;
+        selectedTripId = null;
 
-          <a class="openBtn" href="/drivers/trips/${t.id}">Отвори списъка →</a>
+        renderAll();
+      });
+    });
+  }
+
+  function tripChoiceHtml(trip) {
+    const isActive = Number(trip.id) === Number(selectedTripId);
+    const activeClass = isActive ? " active" : "";
+
+    const missingBlock = Number(trip.missing || 0) > 0
+      ? `
+        <div class="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-black text-rose-700">
+          Липсват: ${Number(trip.missing || 0)}
         </div>
-      `);
+      `
+      : "";
+
+    return `
+      <button
+        type="button"
+        class="trip-choice${activeClass}"
+        data-trip-id="${Number(trip.id)}">
+
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <div class="text-sm font-black text-slate-900">
+              ${esc(trip.routeLabel || "—")}
+            </div>
+
+            <div class="mt-1 text-xs text-slate-500">
+              Курс #${Number(trip.id)}
+            </div>
+          </div>
+
+          <div class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-black text-slate-700">
+            ${esc(trip.time || "—")}
+          </div>
+        </div>
+
+        <div class="mt-3 flex flex-wrap gap-2">
+          <div class="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-600">
+            Пътници: ${Number(trip.total || 0)}
+          </div>
+
+          ${missingBlock}
+        </div>
+      </button>
+    `;
+  }
+
+  function renderDirectionBox(directionKey, title, cssClass) {
+    const items = tripsForSelectedDate()
+      .filter((trip) => trip.dir === directionKey)
+      .sort((a, b) => {
+        return String(a.time || "").localeCompare(String(b.time || ""));
+      });
+
+    const body = items.length
+      ? `
+        <div class="mt-4 space-y-3">
+          ${items.map(tripChoiceHtml).join("")}
+        </div>
+      `
+      : `
+        <div class="mt-5 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+          Няма рейс за избраната дата.
+        </div>
+      `;
+
+    return `
+      <div class="direction-box ${cssClass}">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Направление
+            </div>
+
+            <div class="mt-1 text-lg font-black text-slate-900">
+              ${esc(title)}
+            </div>
+          </div>
+
+          <div class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-black text-slate-700">
+            ${items.length}
+          </div>
+        </div>
+
+        ${body}
+      </div>
+    `;
+  }
+
+  function renderOtherTrips() {
+    const wrap = document.getElementById("otherTripsWrap");
+
+    if (!wrap) return;
+
+    const items = tripsForSelectedDate()
+      .filter((trip) => trip.dir === "OTHER")
+      .sort((a, b) => {
+        return String(a.time || "").localeCompare(String(b.time || ""));
+      });
+
+    if (!items.length) {
+      wrap.innerHTML = "";
+      wrap.classList.add("hidden");
+      return;
+    }
+
+    wrap.classList.remove("hidden");
+
+    wrap.innerHTML = `
+      <div class="direction-box other">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Допълнителни маршрути
+            </div>
+
+            <div class="mt-1 text-lg font-black text-slate-900">
+              Други рейсове
+            </div>
+          </div>
+
+          <div class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-black text-slate-700">
+            ${items.length}
+          </div>
+        </div>
+
+        <div class="mt-4 space-y-3">
+          ${items.map(tripChoiceHtml).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  function attachTripChoiceEvents() {
+    document.querySelectorAll("[data-trip-id]").forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedTripId = Number(button.dataset.tripId);
+
+        renderDirectionGrid();
+        renderOtherTrips();
+        attachTripChoiceEvents();
+        renderTripDetails();
+      });
+    });
+  }
+
+  function renderDirectionGrid() {
+    const wrap = document.getElementById("directionGrid");
+
+    if (!wrap) return;
+
+    wrap.innerHTML = [
+      renderDirectionBox(
+        "UA_AT",
+        "Украйна → Австрия",
+        "ua-at"
+      ),
+
+      renderDirectionBox(
+        "AT_UA",
+        "Австрия → Украйна",
+        "at-ua"
+      ),
+    ].join("");
+  }
+
+  function renderTripDetails() {
+    const wrap = document.getElementById("tripDetailsWrap");
+
+    if (!wrap) return;
+
+    const trip = findSelectedTrip();
+
+    if (!trip) {
+      wrap.innerHTML = "";
+      wrap.classList.add("hidden");
+      return;
+    }
+
+    wrap.classList.remove("hidden");
+
+    const missingValue = Number(trip.missing || 0);
+
+    wrap.innerHTML = `
+      <div class="details-card">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Избран рейс
+            </div>
+
+            <div class="mt-1 text-xl font-black text-slate-900">
+              ${esc(trip.routeLabel || "—")}
+            </div>
+
+            <div class="mt-1 text-sm text-slate-500">
+              Курс #${Number(trip.id)}
+            </div>
+          </div>
+
+          <a
+            href="/drivers/trips/${Number(trip.id)}"
+            class="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-black text-white hover:bg-slate-800">
+            Отвори списъка →
+          </a>
+        </div>
+
+        <div class="details-grid mt-5">
+          <div class="details-item">
+            <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Дата
+            </div>
+
+            <div class="mt-1 text-base font-black text-slate-900">
+              ${esc(trip.dateLabel || "—")}
+            </div>
+          </div>
+
+          <div class="details-item">
+            <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Час
+            </div>
+
+            <div class="mt-1 text-base font-black text-slate-900">
+              ${esc(trip.time || "—")}
+            </div>
+          </div>
+
+          <div class="details-item">
+            <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Общо пътници
+            </div>
+
+            <div class="mt-1 text-base font-black text-slate-900">
+              ${Number(trip.total || 0)}
+            </div>
+          </div>
+
+          <div class="details-item">
+            <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Налични редове
+            </div>
+
+            <div class="mt-1 text-base font-black text-slate-900">
+              ${Number(trip.kept || 0)}
+            </div>
+          </div>
+
+          <div class="details-item">
+            <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Липсващи пътници
+            </div>
+
+            <div class="mt-1 text-base font-black ${missingValue > 0 ? "text-rose-700" : "text-emerald-700"}">
+              ${missingValue}
+            </div>
+          </div>
+
+          <div class="details-item">
+            <div class="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Режим
+            </div>
+
+            <div class="mt-1 text-base font-black text-emerald-700">
+              Live данни
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderDateTitle() {
+    const title = document.getElementById("selectedDateTitle");
+    const badge = document.getElementById("tripCountBadge");
+
+    const day = ACTIVE_DAYS.find((item) => item.date === selectedDate);
+    const count = tripsForSelectedDate().length;
+
+    if (title) {
+      title.textContent = day
+        ? `${day.relative_label} • ${day.date_label}`
+        : selectedDate;
+    }
+
+    if (badge) {
+      badge.textContent = count === 1
+        ? "1 рейс"
+        : `${count} рейса`;
     }
   }
 
-  (function(){
-    let viewDate = new Date();
-    viewDate.setDate(1);
+  function renderAll() {
+    const validSelectedTrip = findSelectedTrip();
 
-    const today = ymd(new Date());
-    window.__SELECTED_DATE__ = tripDateSet.has(today) ? today : "";
+    if (!validSelectedTrip) {
+      selectedTripId = null;
+    }
 
-    renderCalendar(viewDate);
-    renderTripsForDay(window.__SELECTED_DATE__ || "");
+    renderDateTabs();
+    renderDateTitle();
+    renderDirectionGrid();
+    renderOtherTrips();
+    attachTripChoiceEvents();
+    renderTripDetails();
+  }
 
-    document.getElementById("calPrev")?.addEventListener("click", () => {
-      viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1);
-      renderCalendar(viewDate);
-    });
-
-    document.getElementById("calNext")?.addEventListener("click", () => {
-      viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1);
-      renderCalendar(viewDate);
-    });
-  })();
+  renderAll();
+})();
 </script>
 
 {% endblock %}

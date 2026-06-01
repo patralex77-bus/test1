@@ -7793,78 +7793,219 @@ def home(request: Request):
     return templates.TemplateResponse(request, "landing.html", {})
 
 
+
+# =======================
+# Driver active trip window
+# =======================
+
+def _driver_active_window_dates() -> tuple[date, date, date]:
+    """
+    Driver portal показва само:
+      - вчера
+      - днес
+      - утре
+
+    Използва Europe/Vienna чрез _today_vienna().
+    """
+    today = _today_vienna()
+
+    return (
+        today - timedelta(days=1),
+        today,
+        today + timedelta(days=1),
+    )
+
+
+def _trip_is_in_driver_active_window(trip: Trip | None) -> bool:
+    """
+    Проверява дали даден рейс попада в активния driver прозорец:
+    вчера / днес / утре.
+    """
+    if not trip:
+        return False
+
+    trip_datetime = getattr(trip, "date_time", None)
+
+    if not trip_datetime:
+        return False
+
+    previous_day, _today, next_day = _driver_active_window_dates()
+    trip_date = trip_datetime.date()
+
+    return previous_day <= trip_date <= next_day
+
+
+def _ensure_trip_visible_for_driver(trip: Trip | None) -> None:
+    """
+    Driver няма достъп до стари или твърде бъдещи рейсове
+    чрез директно въвеждане на URL.
+    """
+    if not _trip_is_in_driver_active_window(trip):
+        raise HTTPException(
+            status_code=403,
+            detail="Trip is outside the active driver window",
+        )
+
+
+def _driver_trip_direction_meta(trip: Trip) -> dict:
+    """
+    Групира рейсовете за driver portal като:
+      UA_AT = Украйна → Австрия
+      AT_UA = Австрия → Украйна
+      OTHER = нетипичен маршрут
+
+    Използва съществуващия STOP_ADDRESS_BOOK и aliases.
+    """
+    route_from = getattr(trip, "route_from", None)
+    route_to = getattr(trip, "route_to", None)
+
+    country_from = _dashboard_stop_country_group(route_from)
+    country_to = _dashboard_stop_country_group(route_to)
+
+    if country_from == "UA" and country_to == "AT":
+        return {
+            "key": "UA_AT",
+            "label": "Украйна → Австрия",
+        }
+
+    if country_from == "AT" and country_to == "UA":
+        return {
+            "key": "AT_UA",
+            "label": "Австрия → Украйна",
+        }
+
+    # Legacy fallback за Innsbruck ↔ Kyiv.
+    legacy_direction = _direction_code_from_values(route_from, route_to)
+
+    if legacy_direction == "KI":
+        return {
+            "key": "UA_AT",
+            "label": "Украйна → Австрия",
+        }
+
+    if legacy_direction == "IK":
+        return {
+            "key": "AT_UA",
+            "label": "Австрия → Украйна",
+        }
+
+    return {
+        "key": "OTHER",
+        "label": f"{route_from or '—'} → {route_to or '—'}",
+    }
+
+
 @app.get("/drivers", response_class=HTMLResponse)
 def drivers_page(request: Request, db: Session = Depends(get_db)):
     _ensure_driver(request)
 
+    previous_day, today, next_day = _driver_active_window_dates()
+
+    window_start = datetime.combine(previous_day, time.min)
+    window_end = datetime.combine(
+        next_day + timedelta(days=1),
+        time.min,
+    )
+
+    # ВАЖНО:
+    # Няма филтър Trip.is_finalized.
+    # Данните са live и не се изисква Freigabe от admin.
     trips = (
         db.query(Trip)
-        .filter(Trip.is_finalized == True)
-        .order_by(Trip.date_time.asc())
+        .filter(Trip.date_time.isnot(None))
+        .filter(Trip.date_time >= window_start)
+        .filter(Trip.date_time < window_end)
+        .order_by(Trip.date_time.asc(), Trip.id.asc())
         .all()
     )
 
-    trips_data = []
+    active_days = [
+        {
+            "date": previous_day.isoformat(),
+            "relative_label": "Вчера",
+            "date_label": previous_day.strftime("%d.%m.%Y"),
+            "is_today": False,
+        },
+        {
+            "date": today.isoformat(),
+            "relative_label": "Днес",
+            "date_label": today.strftime("%d.%m.%Y"),
+            "is_today": True,
+        },
+        {
+            "date": next_day.isoformat(),
+            "relative_label": "Утре",
+            "date_label": next_day.strftime("%d.%m.%Y"),
+            "is_today": False,
+        },
+    ]
 
-    for t in trips:
-        live_payload = _build_driver_trip_live_payload(db, t.id)
-        manifest = _load_driver_manifest(db, t.id)
+    trips_data: list[dict] = []
 
-        t.total_passengers = int(live_payload.get("displayTotal") or 0)
-        t.driver_kept_passenger_count = int(live_payload.get("keptPassengerCount") or 0)
-        t.driver_missing_passenger_count = int(live_payload.get("missingPassengerCount") or 0)
-        t.driver_manifest_published = bool(manifest and manifest.get("publishedAt"))
-        t.driver_manifest_published_at = manifest.get("publishedAt") if manifest else None
+    for trip in trips:
+        live_payload = _build_driver_trip_live_payload(db, trip.id)
+        direction_meta = _driver_trip_direction_meta(trip)
 
-        route_from = (t.route_from or "").strip()
-        route_to = (t.route_to or "").strip()
+        total_passengers = int(
+            live_payload.get("displayTotal")
+            or 0
+        )
 
-        dir_code = _direction_code_from_values(route_from, route_to) or "OTHER"
+        kept_passengers = int(
+            live_payload.get("keptPassengerCount")
+            or 0
+        )
 
-        if dir_code == "IK":
-            label = "Innsbruck → Kyiv"
-        elif dir_code == "KI":
-            label = "Kyiv → Innsbruck"
-        else:
-            label = f"{route_from or '?'} → {route_to or '?'}"
+        missing_passengers = int(
+            live_payload.get("missingPassengerCount")
+            or 0
+        )
 
-        if t.date_time:
-            trips_data.append({
-                "id": int(t.id),
-                "date": t.date_time.strftime("%Y-%m-%d"),
-                "time": t.date_time.strftime("%H:%M"),
-                "from": route_from,
-                "to": route_to,
-                "dir": dir_code,
-                "label": label,
-                "total": int(t.total_passengers or 0),
-                "kept": int(t.driver_kept_passenger_count or 0),
-                "missing": int(t.driver_missing_passenger_count or 0),
-                "published": bool(t.driver_manifest_published),
-                "publishedAt": t.driver_manifest_published_at,
-            })
+        trips_data.append({
+            "id": int(trip.id),
+            "date": trip.date_time.strftime("%Y-%m-%d"),
+            "dateLabel": trip.date_time.strftime("%d.%m.%Y"),
+            "time": trip.date_time.strftime("%H:%M"),
+            "from": (trip.route_from or "").strip(),
+            "to": (trip.route_to or "").strip(),
+            "routeLabel": f"{trip.route_from or '—'} → {trip.route_to or '—'}",
+            "dir": direction_meta["key"],
+            "directionLabel": direction_meta["label"],
+            "total": total_passengers,
+            "kept": kept_passengers,
+            "missing": missing_passengers,
+        })
 
     return templates.TemplateResponse(
         request,
         "drivers_trips.html",
         {
-            "trips": trips,
+            "active_days": active_days,
+            "today": today.isoformat(),
             "trips_data": trips_data,
         },
     )
 
+
+
 @app.get("/drivers/trips/{trip_id}", response_class=HTMLResponse)
-def driver_trip_detail(request: Request, trip_id: int, db: Session = Depends(get_db)):
+def driver_trip_detail(
+    request: Request,
+    trip_id: int,
+    db: Session = Depends(get_db),
+):
     _ensure_driver(request)
 
     trip = crud.get_trip(db, trip_id)
+
     if not trip:
         raise HTTPException(404, "Trip not found")
-    if not trip.is_finalized:
-        raise HTTPException(403, "Trip is not released (no Freigabe)")
+
+    # Няма Freigabe проверка.
+    # Driver вижда live данните, но само за вчера / днес / утре.
+    _ensure_trip_visible_for_driver(trip)
 
     live_payload = _build_driver_trip_live_payload(db, trip_id)
-    manifest = _load_driver_manifest(db, trip_id)
 
     return templates.TemplateResponse(
         request,
@@ -7874,12 +8015,30 @@ def driver_trip_detail(request: Request, trip_id: int, db: Session = Depends(get
             "driver_projection": live_payload,
             "driver_booking_pending": live_payload.get("bookingPending", []),
             "driver_booking_coverage": live_payload.get("bookingCoverage", []),
-            "driver_raw_passenger_count": int(live_payload.get("rawPassengerCount") or 0),
-            "driver_kept_passenger_count": int(live_payload.get("keptPassengerCount") or 0),
-            "driver_missing_passenger_count": int(live_payload.get("missingPassengerCount") or 0),
-            "driver_display_total": int(live_payload.get("displayTotal") or 0),
-            "driver_manifest_published": bool(manifest and manifest.get("publishedAt")),
-            "driver_manifest_published_at": manifest.get("publishedAt") if manifest else None,
+            "driver_raw_passenger_count": int(
+                live_payload.get("rawPassengerCount")
+                or 0
+            ),
+            "driver_kept_passenger_count": int(
+                live_payload.get("keptPassengerCount")
+                or 0
+            ),
+            "driver_missing_passenger_count": int(
+                live_payload.get("missingPassengerCount")
+                or 0
+            ),
+            "driver_display_total": int(
+                live_payload.get("displayTotal")
+                or 0
+            ),
+
+            # Данните вече са винаги live.
+            "driver_live_mode": True,
+
+            # Оставени са за backward compatibility,
+            # ако старият template още ги използва.
+            "driver_manifest_published": False,
+            "driver_manifest_published_at": None,
         },
     )
 
@@ -7953,8 +8112,8 @@ def api_trip_summary(trip_id: int, request: Request, db: Session = Depends(get_d
     if not trip:
         raise HTTPException(404, "Trip not found")
 
-    if is_driver and not is_admin and not trip.is_finalized:
-        raise HTTPException(403, "Trip not released")
+    if is_driver and not is_admin:
+        _ensure_trip_visible_for_driver(trip)
 
     effective_from = _effective_sql_text(TripPassenger.manual_from_city, TripPassenger.from_city)
     effective_to = _effective_sql_text(TripPassenger.manual_to_city, TripPassenger.to_city)
@@ -8023,8 +8182,8 @@ def api_list_passengers(trip_id: int, request: Request, db: Session = Depends(ge
     if not trip:
         raise HTTPException(404, "Trip not found")
 
-    if is_driver and not is_admin and not trip.is_finalized:
-        raise HTTPException(403, "Trip not released")
+    if is_driver and not is_admin:
+        _ensure_trip_visible_for_driver(trip)
 
     passengers = crud.list_passengers(db, trip_id)
     passengers = sorted(
@@ -8123,8 +8282,8 @@ def api_driver_list_passengers(trip_id: int, request: Request, db: Session = Dep
     if not trip:
         raise HTTPException(404, "Trip not found")
 
-    if is_driver and not is_admin and not trip.is_finalized:
-        raise HTTPException(403, "Trip not released")
+    if is_driver and not is_admin:
+        _ensure_trip_visible_for_driver(trip)
 
     payload = _build_driver_trip_live_payload(db, trip_id)
     return JSONResponse(payload.get("passengers", []))
@@ -8244,8 +8403,8 @@ async def api_patch_passenger(passenger_id: int, request: Request, payload: dict
     if not trip:
         raise HTTPException(404, "Trip not found")
 
-    if is_driver and not is_admin and not trip.is_finalized:
-        raise HTTPException(403, "Trip not released")
+    if is_driver and not is_admin:
+        _ensure_trip_visible_for_driver(trip)
 
     if is_driver and not is_admin:
         allowed = {"checkedIn", "paid", "amount", "currency"}
