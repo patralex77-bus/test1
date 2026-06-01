@@ -4,6 +4,17 @@
 {% set departure_time_value = departure_time_label if departure_time_label is defined and departure_time_label else "—" %}
 {% set arrival_time_value = arrival_time_label if arrival_time_label is defined and arrival_time_label else "—" %}
 
+{% if tickets is defined and tickets %}
+  {% set ticket_items = tickets %}
+{% else %}
+  {% set ticket_items = [{
+    "seat_no": selected_seat or "",
+    "qr_url": "/portal/ticket/qr",
+    "qr_download_url": "/portal/ticket/qr/download",
+    "pdf_url": "/portal/ticket/pdf"
+  }] %}
+{% endif %}
+
 <div class="ticketPage max-w-5xl mx-auto">
   <div class="flex items-center justify-between gap-3 mb-6 print:hidden">
     <div>
@@ -20,18 +31,22 @@
         {{ t(request, "portal.ticket.print_ticket") }}
       </button>
 
-      {% if qr_available %}
-      <a href="/portal/ticket/qr"
-         download="ticket-qr-{{ booking.external_id }}.svg"
-         class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-        {{ t(request, "portal.ticket.download_qr") }}
-      </a>
-      {% endif %}
+      {% if ticket_items|length == 1 %}
+        {% set only_ticket = ticket_items[0] %}
 
-      <a href="/portal/ticket/pdf"
-         class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-        {{ t(request, "portal.ticket.download_pdf") }}
-      </a>
+        {% if qr_available %}
+        <a href="{{ only_ticket.qr_download_url }}"
+           download="ticket-qr-{{ booking.external_id }}-seat-{{ only_ticket.seat_no }}.svg"
+           class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+          {{ t(request, "portal.ticket.download_qr") }}
+        </a>
+        {% endif %}
+
+        <a href="{{ only_ticket.pdf_url }}"
+           class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+          {{ t(request, "portal.ticket.download_pdf") }}
+        </a>
+      {% endif %}
 
       <a href="/portal"
          class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
@@ -40,7 +55,32 @@
     </div>
   </div>
 
-  <div class="ticketMainCard">
+  {% for ticket in ticket_items %}
+  <div class="ticketEntry">
+    {% if ticket_items|length > 1 %}
+    <div class="ticketSeatActions flex flex-wrap items-center justify-between gap-3 mb-3 print:hidden">
+      <div class="text-sm font-semibold text-slate-700">
+        {{ t(request, "portal.ticket.seat_label") }}: {{ ticket.seat_no or "—" }}
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        {% if qr_available %}
+        <a href="{{ ticket.qr_download_url }}"
+           download="ticket-qr-{{ booking.external_id }}-seat-{{ ticket.seat_no }}.svg"
+           class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+          {{ t(request, "portal.ticket.download_qr") }}
+        </a>
+        {% endif %}
+
+        <a href="{{ ticket.pdf_url }}"
+           class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+          {{ t(request, "portal.ticket.download_pdf") }}
+        </a>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="ticketMainCard">
     <div class="ticketHeaderWrap">
       <table class="pdfHeaderTable" role="presentation">
         <tr>
@@ -55,7 +95,7 @@
           <td class="pdfHeaderSeat">
             <div class="headerInfoCell seatCell">
               <div class="metaLabel">{{ t(request, "portal.ticket.seat_label") }}</div>
-              <div class="metaValue seatValue">{{ selected_seat or "—" }}</div>
+              <div class="metaValue seatValue">{{ ticket.seat_no or "—" }}</div>
             </div>
           </td>
 
@@ -63,7 +103,7 @@
             {% if qr_available %}
               <div class="qrCompactWrap">
                 <img
-                  src="/portal/ticket/qr"
+                  src="{{ ticket.qr_url }}"
                   alt="{{ t(request, 'portal.ticket.qr_alt') }}"
                   class="qrCompactImage"
                 />
@@ -196,7 +236,9 @@
         {{ t(request, "portal.ticket.warning_p3") }}
       </div>
     </div>
+    </div>
   </div>
+  {% endfor %}
 </div>
 
 <style>
@@ -207,6 +249,10 @@
 
 .ticketPage{
   width:100%;
+}
+
+.ticketEntry + .ticketEntry{
+  margin-top:24px;
 }
 
 .ticketMainCard{
@@ -720,6 +766,15 @@
     font-size:9.4px !important;
     line-height:1.24 !important;
     color:#111827 !important;
+  }
+
+  .ticketEntry + .ticketEntry{
+    margin-top:0 !important;
+  }
+
+  .ticketEntry:not(:last-child){
+    break-after:page !important;
+    page-break-after:always !important;
   }
 }
 </style>
