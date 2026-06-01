@@ -4,28 +4,77 @@
 {% set pending_cancellations = critical.pending_cancellations if critical.pending_cancellations is defined else [] %}
 {% set pending_cancellations_count = critical.pending_cancellations_count if critical.pending_cancellations_count is defined else pending_cancellations|length %}
 
-<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 w-full">
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6 w-full">
   <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
     <div class="text-sm text-slate-500">Total bookings</div>
-    <div class="mt-2 text-3xl font-bold text-slate-900">{{ stats.total_bookings }}</div>
+
+    <div
+      id="statTotalBookings"
+      class="mt-2 text-3xl font-bold text-slate-900">
+      {{ stats.total_bookings }}
+    </div>
+
+    <a href="/admin/bookings/category/all"
+       class="mt-4 inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+      View bookings →
+    </a>
   </div>
 
-  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+  <div class="rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
     <div class="text-sm text-slate-500">Paid</div>
-    <div class="mt-2 text-3xl font-bold text-emerald-600">{{ stats.total_paid }}</div>
+
+    <div
+      id="statPaidBookings"
+      class="mt-2 text-3xl font-bold text-emerald-600">
+      {{ stats.total_paid }}
+    </div>
+
+    <a href="/admin/bookings/category/paid"
+       class="mt-4 inline-flex items-center justify-center rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">
+      View paid →
+    </a>
   </div>
 
-  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+  <div class="rounded-2xl border border-rose-200 bg-white p-5 shadow-sm">
     <div class="text-sm text-slate-500">Pending review</div>
-    <div class="mt-2 text-3xl font-bold text-rose-600">{{ stats.total_pending_review }}</div>
+
+    <div
+      id="statPendingReview"
+      class="mt-2 text-3xl font-bold text-rose-600">
+      {{ stats.total_pending_review }}
+    </div>
+
+    <a href="/admin/bookings/category/pending-review"
+       class="mt-4 inline-flex items-center justify-center rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100">
+      Review payments →
+    </a>
   </div>
 
   <div class="rounded-2xl border border-sky-200 bg-white p-5 shadow-sm">
     <div class="text-sm text-slate-500">New today</div>
-    <div class="mt-2 text-3xl font-bold text-sky-600">{{ stats.total_today_bookings }}</div>
-    <div class="mt-2 text-xs text-slate-500">00:00 – 24:00</div>
+
+    <div
+      id="statTodayBookings"
+      class="mt-2 text-3xl font-bold text-sky-600">
+      {{ stats.total_today_bookings }}
+    </div>
+
+    <div class="mt-2 text-xs text-slate-500">
+      00:00 – 24:00 Europe/Vienna
+    </div>
+
+    <a href="/admin/bookings/category/new-today"
+       class="mt-4 inline-flex items-center justify-center rounded-xl border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-100">
+      View new bookings →
+    </a>
   </div>
 </div>
+
+<div class="mb-6 text-xs text-slate-400">
+  Live counters updated:
+  <span id="dashboardStatsUpdatedAt">{{ stats.updated_at }}</span>
+</div>
+
 
 <div class="grid grid-cols-1 xl:grid-cols-4 gap-4 mb-6">
   <div class="rounded-2xl border border-rose-200 bg-white shadow-sm">
@@ -895,5 +944,72 @@
     });
   })();
 </script>
+
+<script>
+(function () {
+  const totalBookingsEl = document.getElementById("statTotalBookings");
+  const paidBookingsEl = document.getElementById("statPaidBookings");
+  const pendingReviewEl = document.getElementById("statPendingReview");
+  const todayBookingsEl = document.getElementById("statTodayBookings");
+  const updatedAtEl = document.getElementById("dashboardStatsUpdatedAt");
+
+  async function refreshDashboardStats() {
+    try {
+      const response = await fetch(
+        "/admin/bookings/dashboard-stats?_=" + Date.now(),
+        {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: {
+            "Cache-Control": "no-cache"
+          }
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Dashboard statistics refresh failed");
+      }
+
+      const payload = await response.json();
+      const stats = payload.stats || {};
+
+      if (totalBookingsEl) {
+        totalBookingsEl.textContent = String(stats.total_bookings ?? 0);
+      }
+
+      if (paidBookingsEl) {
+        paidBookingsEl.textContent = String(stats.total_paid ?? 0);
+      }
+
+      if (pendingReviewEl) {
+        pendingReviewEl.textContent = String(stats.total_pending_review ?? 0);
+      }
+
+      if (todayBookingsEl) {
+        todayBookingsEl.textContent = String(stats.total_today_bookings ?? 0);
+      }
+
+      if (updatedAtEl && stats.updated_at) {
+        updatedAtEl.textContent = String(stats.updated_at);
+      }
+    } catch (error) {
+      console.error("[Dashboard stats refresh failed]", error);
+    }
+  }
+
+  refreshDashboardStats();
+
+  setInterval(function () {
+    refreshDashboardStats();
+  }, 15000);
+
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) {
+      refreshDashboardStats();
+    }
+  });
+})();
+</script>
+
 
 {% endblock %}
