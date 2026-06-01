@@ -3073,13 +3073,41 @@ def _booking_service_label(booking: Booking) -> str:
     return f"{date_str} • {bus_from} → {bus_to}"
 
 
+
+def _qr_clean_text(value) -> str | None:
+    """
+    Нормализира QR стойност към текст.
+
+    Работи безопасно и когато JSON payload съдържа:
+      - int
+      - float
+      - str
+      - None
+    """
+    if value is None:
+        return None
+
+    value_str = str(value).strip()
+    return value_str or None
+
+
+
 def _portal_ticket_payload(
     booking: Booking,
     selected_seat: str,
     passenger: TripPassenger | None = None,
     trip: Trip | None = None,
 ) -> dict:
+    """
+    Създава подписан QR payload за boarding ticket.
+
+    ВАЖНО:
+    external_id и seat_no винаги се записват като текст.
+    Така генерирането, сканирането и signature verification
+    работят стабилно независимо от типа на DB колоната.
+    """
     booking_date = getattr(booking, "booking_date", None)
+
     if isinstance(booking_date, datetime):
         booking_date_iso = booking_date.date().isoformat()
     elif booking_date:
@@ -3097,42 +3125,58 @@ def _portal_ticket_payload(
         except Exception:
             trip_date_iso = str(trip.date_time)
 
-    passenger_name = f"{booking.first_name or ''} {booking.last_name or ''}".strip()
-    payment_status = getattr(booking, "payment_status", None)
+    first_name = _qr_clean_text(getattr(booking, "first_name", None))
+    last_name = _qr_clean_text(getattr(booking, "last_name", None))
+
+    passenger_name = f"{first_name or ''} {last_name or ''}".strip() or None
+
+    payment_status = _qr_clean_text(getattr(booking, "payment_status", None))
     payment_status_norm = str(payment_status or "").strip().lower()
 
     payload = {
         "type": "boarding_ticket",
         "version": 1,
 
-        "booking_id": booking.id,
+        "booking_id": getattr(booking, "id", None),
         "passenger_id": getattr(passenger, "id", None),
 
-        "trip_id": booking.trip_id,
-        "external_id": booking.external_id,
+        "trip_id": getattr(booking, "trip_id", None),
+        "external_id": _qr_clean_text(getattr(booking, "external_id", None)),
 
-        "first_name": booking.first_name,
-        "last_name": booking.last_name,
+        "first_name": first_name,
+        "last_name": last_name,
         "passenger_name": passenger_name,
 
         "booking_date": booking_date_iso,
         "trip_date": trip_date_iso,
 
-        "route_from": booking.route_from,
-        "route_to": booking.route_to,
-        "direction": f"{booking.route_from or '-'} -> {booking.route_to or '-'}",
+        "route_from": _qr_clean_text(getattr(booking, "route_from", None)),
+        "route_to": _qr_clean_text(getattr(booking, "route_to", None)),
+        "direction": (
+            f"{getattr(booking, 'route_from', None) or '-'}"
+            f" -> "
+            f"{getattr(booking, 'route_to', None) or '-'}"
+        ),
 
-        "bus_from": booking.bus_from,
-        "bus_to": booking.bus_to,
+        "bus_from": _qr_clean_text(getattr(booking, "bus_from", None)),
+        "bus_to": _qr_clean_text(getattr(booking, "bus_to", None)),
 
-        "seat_no": selected_seat,
+        "seat_no": _qr_clean_text(selected_seat),
 
-        "paid": payment_status_norm in {"paid", "approved", "payment_approved"},
+        "paid": payment_status_norm in {
+            "paid",
+            "approved",
+            "payment_approved",
+        },
+
         "payment_status": payment_status,
-        "booking_status": getattr(booking, "booking_status", None),
+        "booking_status": _qr_clean_text(
+            getattr(booking, "booking_status", None)
+        ),
     }
 
     payload["sig"] = _sign_ticket_payload(payload)
+
     return payload
 
 
@@ -3334,81 +3378,101 @@ def _ticket_qr_available(booking: Booking) -> bool:
 
 def _parse_ticket_payload(raw: str) -> dict | None:
     """
-    Очаква JSON payload от /portal/ticket/qr.
-    Връща нормализиран dict или None.
-    """
+    Парсва JSON payload от QR билет.
 
+    ВАЖНО:
+    1) Signature verification се прави върху оригиналния JSON dict.
+    2) Едва след това стойностите се нормализират.
+    3) Работи и със стари QR кодове, при които external_id е число.
+    """
     raw = (raw or "").strip()
+
     if not raw:
         return None
 
     try:
-        data = json.loads(raw)
+        original_data = json.loads(raw)
     except Exception:
         return None
 
-    if not isinstance(data, dict):
+    if not isinstance(original_data, dict):
         return None
 
-    if data.get("type") != "boarding_ticket":
+    if original_data.get("type") != "boarding_ticket":
         return None
 
-    def _as_int(v):
-        if v is None or v == "":
+    def _as_int(value):
+        if value is None or value == "":
             return None
+
         try:
-            return int(v)
+            return int(value)
         except Exception:
             return None
 
-    payload = {
-        "type": "boarding_ticket",
-        "version": _as_int(data.get("version")) or 1,
+    # -------------------------------------------------------
+    # Проверяваме подписа ПРЕДИ да променяме типовете.
+    # Това е критично за старите QR кодове, при които
+    # external_id може да е JSON number, а не string.
+    # -------------------------------------------------------
+    signature_verified = False
+    signature = _qr_clean_text(original_data.get("sig"))
 
-        "booking_id": _as_int(data.get("booking_id")),
-        "passenger_id": _as_int(data.get("passenger_id")),
-        "trip_id": _as_int(data.get("trip_id")),
-
-        "external_id": (data.get("external_id") or "").strip() or None,
-
-        "first_name": (data.get("first_name") or "").strip() or None,
-        "last_name": (data.get("last_name") or "").strip() or None,
-        "passenger_name": (data.get("passenger_name") or "").strip() or None,
-
-        "booking_date": (data.get("booking_date") or "").strip() or None,
-        "trip_date": (data.get("trip_date") or "").strip() or None,
-
-        "route_from": (data.get("route_from") or "").strip() or None,
-        "route_to": (data.get("route_to") or "").strip() or None,
-        "direction": (data.get("direction") or "").strip() or None,
-
-        "bus_from": (data.get("bus_from") or "").strip() or None,
-        "bus_to": (data.get("bus_to") or "").strip() or None,
-
-        "seat_no": str(data.get("seat_no") or "").strip() or None,
-
-        "paid": bool(data.get("paid", False)),
-        "payment_status": (data.get("payment_status") or "").strip() or None,
-        "booking_status": (data.get("booking_status") or "").strip() or None,
-
-        "sig": (data.get("sig") or "").strip() or None,
-    }
-
-    # Минимална валидност
-    if not payload["booking_id"] and not payload["external_id"]:
-        return None
-
-    # Ако има подпис, проверяваме го.
-    # Така старите QR без sig още ще работят.
-    if payload.get("sig"):
-        if not _verify_ticket_payload_signature(payload):
+    if signature:
+        if not _verify_ticket_payload_signature(original_data):
             return None
 
-    # Ако искаш СТРОГО да приемаш само подписани QR, ползвай това вместо горния блок:
-    # if not payload.get("sig"):
-    #     return None
-    # if not _verify_ticket_payload_signature(payload):
-    #     return None
+        signature_verified = True
+
+    payload = {
+        "type": "boarding_ticket",
+        "version": _as_int(original_data.get("version")) or 1,
+
+        "booking_id": _as_int(original_data.get("booking_id")),
+        "passenger_id": _as_int(original_data.get("passenger_id")),
+        "trip_id": _as_int(original_data.get("trip_id")),
+
+        "external_id": _qr_clean_text(original_data.get("external_id")),
+
+        "first_name": _qr_clean_text(original_data.get("first_name")),
+        "last_name": _qr_clean_text(original_data.get("last_name")),
+        "passenger_name": _qr_clean_text(
+            original_data.get("passenger_name")
+        ),
+
+        "booking_date": _qr_clean_text(original_data.get("booking_date")),
+        "trip_date": _qr_clean_text(original_data.get("trip_date")),
+
+        "route_from": _qr_clean_text(original_data.get("route_from")),
+        "route_to": _qr_clean_text(original_data.get("route_to")),
+        "direction": _qr_clean_text(original_data.get("direction")),
+
+        "bus_from": _qr_clean_text(original_data.get("bus_from")),
+        "bus_to": _qr_clean_text(original_data.get("bus_to")),
+
+        "seat_no": _qr_clean_text(original_data.get("seat_no")),
+
+        "paid": bool(original_data.get("paid", False)),
+
+        "payment_status": _qr_clean_text(
+            original_data.get("payment_status")
+        ),
+
+        "booking_status": _qr_clean_text(
+            original_data.get("booking_status")
+        ),
+
+        "sig": signature,
+
+        # Използва се от resolver-а, за да не проверява повторно
+        # подписа върху вече нормализирани стойности.
+        "_signature_verified": signature_verified,
+    }
+
+    # Минимална валидност:
+    # трябва да има booking_id или external_id.
+    if not payload["booking_id"] and not payload["external_id"]:
+        return None
 
     return payload
 
@@ -3698,44 +3762,97 @@ def _resolve_trip_passenger_by_ticket_payload(
     db: Session,
     payload: dict,
 ) -> tuple[Booking | None, TripPassenger | None]:
+    """
+    Намира booking и TripPassenger row по вече парснат QR payload.
+
+    Signature verification се прави в _parse_ticket_payload().
+    Тук НЕ подписваме повторно нормализирания payload, защото
+    старите QR кодове може да съдържат external_id като число.
+    """
     if not payload:
         return None, None
 
-    # ако има подпис и той е невалиден -> режем QR-а
-    if payload.get("sig") and not _verify_ticket_payload_signature(payload):
+    # Ако QR има подпис, parser-ът трябва вече да го е потвърдил.
+    if payload.get("sig") and not payload.get("_signature_verified"):
         return None, None
 
     booking_id = payload.get("booking_id")
     passenger_id = payload.get("passenger_id")
     trip_id = payload.get("trip_id")
-    external_id = payload.get("external_id")
-    seat_no = (payload.get("seat_no") or "").strip()
+
+    external_id = _qr_clean_text(payload.get("external_id"))
+    seat_no = _qr_clean_text(payload.get("seat_no")) or ""
 
     booking = None
-    if booking_id:
-        booking = db.query(Booking).filter(Booking.id == booking_id).first()
 
+    # -------------------------------------------------------
+    # 1) Booking ID е най-силният match
+    # -------------------------------------------------------
+    if booking_id:
+        booking = (
+            db.query(Booking)
+            .filter(Booking.id == int(booking_id))
+            .first()
+        )
+
+    # -------------------------------------------------------
+    # 2) Fallback по external_id
+    # Работи независимо дали DB колоната е integer или string.
+    # -------------------------------------------------------
     if not booking and external_id:
-        booking = db.query(Booking).filter(Booking.external_id == external_id).first()
+        booking = (
+            db.query(Booking)
+            .filter(cast(Booking.external_id, String) == external_id)
+            .first()
+        )
 
     if not booking:
         return None, None
 
-    # 1) най-силен match: passenger_id
+    # -------------------------------------------------------
+    # Допълнителна защита:
+    # ако QR съдържа external_id и booking е намерен по booking_id,
+    # проверяваме дали стойностите съвпадат.
+    # -------------------------------------------------------
+    booking_external_id = _qr_clean_text(
+        getattr(booking, "external_id", None)
+    )
+
+    if external_id and booking_external_id != external_id:
+        return None, None
+
+    # -------------------------------------------------------
+    # 3) Най-силен passenger match: passenger_id
+    # -------------------------------------------------------
     if passenger_id:
         passenger = (
             db.query(TripPassenger)
-            .filter(TripPassenger.id == passenger_id)
+            .filter(TripPassenger.id == int(passenger_id))
             .first()
         )
+
         if passenger:
-            if booking.id and getattr(passenger, "booking_id", None) not in (None, booking.id):
+            passenger_booking_id = getattr(passenger, "booking_id", None)
+            passenger_trip_id = getattr(passenger, "trip_id", None)
+
+            if (
+                passenger_booking_id is not None
+                and int(passenger_booking_id) != int(booking.id)
+            ):
                 return booking, None
-            if trip_id and getattr(passenger, "trip_id", None) not in (None, trip_id):
+
+            if (
+                trip_id is not None
+                and passenger_trip_id is not None
+                and int(passenger_trip_id) != int(trip_id)
+            ):
                 return booking, None
+
             return booking, passenger
 
-    # 2) booking_id match
+    # -------------------------------------------------------
+    # 4) Passenger rows по booking_id
+    # -------------------------------------------------------
     passengers = (
         db.query(TripPassenger)
         .filter(TripPassenger.booking_id == booking.id)
@@ -3743,34 +3860,58 @@ def _resolve_trip_passenger_by_ticket_payload(
         .all()
     )
 
-    # 3) fallback: external_id within trip
-    if not passengers and booking.trip_id:
+    # -------------------------------------------------------
+    # 5) Fallback: external_id в същия trip
+    # -------------------------------------------------------
+    if not passengers and getattr(booking, "trip_id", None):
         ext_key = _booking_external_id_key(booking)
+
         if ext_key:
             candidates = (
                 db.query(TripPassenger)
                 .filter(TripPassenger.trip_id == booking.trip_id)
                 .all()
             )
-            matched = []
-            booking_by_id = {booking.id: booking}
-            for p in candidates:
-                p_ext = _trip_passenger_external_id_key(p, booking_by_id=booking_by_id)
-                if p_ext == ext_key:
-                    matched.append(p)
-            passengers = sorted(matched, key=_trip_passenger_sort_key)
+
+            matched: list[TripPassenger] = []
+            booking_by_id = {int(booking.id): booking}
+
+            for candidate in candidates:
+                candidate_external_id = _trip_passenger_external_id_key(
+                    candidate,
+                    booking_by_id=booking_by_id,
+                )
+
+                if (
+                    candidate_external_id
+                    and str(candidate_external_id).strip()
+                    == str(ext_key).strip()
+                ):
+                    matched.append(candidate)
+
+            passengers = sorted(
+                matched,
+                key=_trip_passenger_sort_key,
+            )
 
     if not passengers:
         return booking, None
 
-    # 4) seat match
+    # -------------------------------------------------------
+    # 6) Seat match
+    # -------------------------------------------------------
     if seat_no:
-        for p in passengers:
-            if (_effective_passenger_seat(p) or "").strip() == seat_no:
-                return booking, p
+        for passenger in passengers:
+            passenger_seat = _effective_passenger_seat(passenger)
 
-    # 5) ако няма seat match -> първия passenger
+            if str(passenger_seat or "").strip() == seat_no:
+                return booking, passenger
+
+    # -------------------------------------------------------
+    # 7) Fallback: първият passenger row
+    # -------------------------------------------------------
     return booking, passengers[0]
+
 
 
 # =======================
