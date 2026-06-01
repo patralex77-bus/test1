@@ -1,967 +1,2489 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="topbar">
-  <a href="/drivers" class="back">← Рейсове</a>
-  <div class="titleWrap">
-    <div class="title">
-      <div class="t1">Курс #{{ trip.id }}</div>
-      <div class="t2">
-        {{ trip.route_from or "?" }} → {{ trip.route_to or "?" }}
-        {% if trip.date_time %}
-          • {{ trip.date_time.strftime("%d.%m.%Y") }}
-        {% endif %}
-      </div>
-    </div>
+<div class="mx-auto max-w-7xl pb-10">
 
-    <div class="metaChips">
-      <span class="metaChip live">LIVE</span>
-      {% if driver_manifest_published and driver_manifest_published_at %}
-        <span class="metaChip">Manifest: {{ driver_manifest_published_at }}</span>
-      {% else %}
-        <span class="metaChip muted">Manifest: не е публикуван</span>
-      {% endif %}
-    </div>
-  </div>
-</div>
+  <!-- =======================================================
+       HEADER
+       ======================================================= -->
+  <div class="driver-header">
+    <a href="/drivers" class="back-btn">
+      ← Рейсове
+    </a>
 
-<div class="panel">
-  <div class="importRow">
-    <a href="/drivers/scan?trip_id={{ trip.id }}" class="btn">QR scan</a>
-    <button id="reloadBtn" type="button" class="btn ghost">Обнови</button>
-    <button id="toggleView" type="button" class="btn ghost">Card view</button>
-    <button id="printBtn" type="button" class="btn ghost">Печат / PDF</button>
-    <span id="saveStatus" class="status"></span>
-  </div>
-</div>
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div class="text-lg font-black tracking-tight text-slate-900">
+            Курс #{{ trip.id }}
+          </div>
 
-<div class="panel">
-  <div class="filters">
-    <input id="search" class="search" placeholder="Търси по име / телефон / място..." />
-    <label class="chip"><input type="checkbox" id="onlyUnchecked" /> само нечекирани</label>
-    <label class="chip"><input type="checkbox" id="onlyUnpaid" /> само неплатили</label>
-  </div>
-</div>
+          <div class="mt-1 text-sm font-semibold text-slate-600">
+            {{ trip.route_from or "?" }} → {{ trip.route_to or "?" }}
+          </div>
 
-<div class="panel">
-  <div class="summaryGrid">
-    <div class="sumCard">
-      <div class="sumTitle">Driver total</div>
-      <div class="totals">
-        <div class="totRow">
-          <div class="totLabel">Показвани пътници</div>
-          <div class="totValue">{{ driver_display_total }}</div>
+          <div class="mt-1 text-sm text-slate-500">
+            {% if trip.date_time %}
+              {{ trip.date_time.strftime("%d.%m.%Y") }}
+              • {{ trip.date_time.strftime("%H:%M") }}
+            {% else %}
+              Датата не е зададена
+            {% endif %}
+          </div>
         </div>
-      </div>
-      <div class="sumHint">
-        Това е общият брой за водача = deduped passengers + липсващи от booking.
-      </div>
-    </div>
 
-    <div class="sumCard">
-      <div class="sumTitle">Deduped rows</div>
-      <div class="totals">
-        <div class="totRow">
-          <div class="totLabel">Raw TripPassenger</div>
-          <div class="totValue">{{ driver_raw_passenger_count }}</div>
-        </div>
-        <div class="totRow">
-          <div class="totLabel">След dedupe</div>
-          <div class="totValue">{{ driver_kept_passenger_count }}</div>
-        </div>
-      </div>
-      <div class="sumHint">
-        Таблицата по-долу работи върху deduped passenger rows.
-      </div>
-    </div>
+        <div class="flex flex-wrap gap-2">
+          <span class="meta-chip live">
+            LIVE DATA
+          </span>
 
-    <div class="sumCard">
-      <div class="sumTitle">Booking missing</div>
-      <div class="totals">
-        <div class="totRow">
-          <div class="totLabel">Липсващи пътници</div>
-          <div class="totValue">{{ driver_missing_passenger_count }}</div>
+          <span class="meta-chip">
+            Auto refresh
+          </span>
         </div>
-        <div class="totRow">
-          <div class="totLabel">Booking groups</div>
-          <div class="totValue">{{ driver_booking_pending|length }}</div>
-        </div>
-      </div>
-      <div class="sumHint">
-        Това са booking-и, които още не са напълно покрити от Excel/manual rows.
       </div>
     </div>
   </div>
-</div>
 
-{% if driver_booking_pending %}
-<div class="panel">
-  <div class="sumTitle">Booking reservations not yet fully materialized in Excel</div>
+  <!-- =======================================================
+       TABLET-FIRST ACTION BAR
+       ======================================================= -->
+  <div class="action-panel sticky-actions">
+    <div class="flex flex-wrap items-center gap-3">
+      <a
+        href="/drivers/scan?trip_id={{ trip.id }}"
+        class="primary-scan-btn">
+        Сканирай QR билет
+      </a>
 
-  <table class="tbl">
-    <thead>
-      <tr>
-        <th style="width:90px">Booking</th>
-        <th style="width:130px">Unique ID</th>
-        <th>Клиент</th>
-        <th style="width:130px">Маршрут</th>
-        <th style="width:70px">Общо</th>
-        <th style="width:90px">Покрити</th>
-        <th style="width:90px">Липсват</th>
-        <th style="width:90px">Payment</th>
-        <th style="width:90px">Status</th>
-        <th style="width:90px"></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for item in driver_booking_pending %}
-      <tr>
-        <td>#{{ item.booking_id }}</td>
-        <td>{{ item.external_id }}</td>
-        <td>{{ item.customer_name }}</td>
-        <td>{{ item.route }}</td>
-        <td>{{ item.wanted_count }}</td>
-        <td>{{ item.covered_count }}</td>
-        <td><b>{{ item.missing_count }}</b></td>
-        <td>{{ item.payment_status }}</td>
-        <td>{{ item.booking_status }}</td>
-        <td>
-          <a href="{{ item.url }}" class="back" style="padding:6px 10px;font-size:12px;">
-            Open
-          </a>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% endif %}
+      <button
+        id="reloadBtn"
+        type="button"
+        class="action-btn">
+        Обнови
+      </button>
 
-<div id="tableView" class="panel">
-  <table class="tbl">
-    <thead>
-      <tr>
-        <th style="width:52px">№</th>
-        <th style="width:110px">От</th>
-        <th style="width:110px">До</th>
-        <th>Име</th>
-        <th style="width:140px">Телефон</th>
-        <th style="width:90px">Място</th>
-        <th style="width:220px">Инфо</th>
-        <th style="width:120px">Статус</th>
-        <th style="width:140px">Каса</th>
-      </tr>
-    </thead>
-    <tbody id="rowsDriver"></tbody>
-  </table>
+      <button
+        id="toggleView"
+        type="button"
+        class="action-btn">
+        Card view
+      </button>
 
-  <div class="summaryGrid">
-    <div class="sumCard">
-      <div class="sumTitle">ОТ (бр. пътници)</div>
-      <table class="sumTbl">
-        <thead><tr><th>Град</th><th style="text-align:right">Брой</th></tr></thead>
+      <button
+        id="printBtn"
+        type="button"
+        class="action-btn print-only-btn">
+        Печат / PDF
+      </button>
+
+      <span id="saveStatus" class="status-text"></span>
+    </div>
+  </div>
+
+  <!-- =======================================================
+       FILTERS
+       ======================================================= -->
+  <div class="panel">
+    <div class="filters">
+      <input
+        id="search"
+        class="search-input"
+        placeholder="Търси по име, телефон, място, град или информация..." />
+
+      <label class="filter-chip">
+        <input type="checkbox" id="onlyUnchecked" />
+        само нечекирани
+      </label>
+
+      <label class="filter-chip">
+        <input type="checkbox" id="onlyUnpaid" />
+        само неплатили
+      </label>
+    </div>
+  </div>
+
+  <!-- =======================================================
+       LIVE STATUS SUMMARY
+       ======================================================= -->
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="summary-label">
+        Общо пътници
+      </div>
+
+      <div id="statTotalPassengers" class="summary-value">
+        {{ driver_display_total | default(0, true) }}
+      </div>
+
+      <div class="summary-hint">
+        Актуален брой за този рейс
+      </div>
+    </div>
+
+    <div class="summary-card">
+      <div class="summary-label">
+        Чекирани
+      </div>
+
+      <div id="statCheckedPassengers" class="summary-value text-emerald-700">
+        0
+      </div>
+
+      <div class="summary-hint">
+        Пътници, които вече са качени
+      </div>
+    </div>
+
+    <div class="summary-card">
+      <div class="summary-label">
+        Неплатили
+      </div>
+
+      <div id="statUnpaidPassengers" class="summary-value text-rose-700">
+        0
+      </div>
+
+      <div class="summary-hint">
+        Нужна е проверка или плащане в брой
+      </div>
+    </div>
+
+    <div class="summary-card">
+      <div class="summary-label">
+        Показвани след филтър
+      </div>
+
+      <div id="statVisiblePassengers" class="summary-value text-blue-700">
+        0
+      </div>
+
+      <div class="summary-hint">
+        Спрямо активното търсене
+      </div>
+    </div>
+  </div>
+
+  <!-- =======================================================
+       BOOKINGS WITHOUT COMPLETE PASSENGER ROWS
+       ======================================================= -->
+  {% if driver_booking_pending %}
+    <div class="panel warning-panel">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div class="text-base font-black text-amber-900">
+            Резервации с липсващи пътнически редове
+          </div>
+
+          <div class="mt-1 text-sm leading-6 text-amber-800">
+            Следните резервации са налични в системата, но все още не са напълно
+            покрити с отделни редове за всички пътници.
+          </div>
+        </div>
+
+        <div class="rounded-full border border-amber-300 bg-white px-3 py-1 text-xs font-black text-amber-900">
+          {{ driver_booking_pending | length }}
+        </div>
+      </div>
+
+      <div class="mt-4 overflow-x-auto">
+        <table class="data-table min-w-[850px]">
+          <thead>
+            <tr>
+              <th>Booking</th>
+              <th>Unique ID</th>
+              <th>Клиент</th>
+              <th>Маршрут</th>
+              <th>Общо</th>
+              <th>Покрити</th>
+              <th>Липсват</th>
+              <th>Плащане</th>
+              <th>Статус</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for item in driver_booking_pending %}
+              <tr>
+                <td>#{{ item.booking_id }}</td>
+                <td>{{ item.external_id }}</td>
+                <td>{{ item.customer_name }}</td>
+                <td>{{ item.route }}</td>
+                <td>{{ item.wanted_count }}</td>
+                <td>{{ item.covered_count }}</td>
+                <td>
+                  <span class="missing-badge">
+                    {{ item.missing_count }}
+                  </span>
+                </td>
+                <td>{{ item.payment_status }}</td>
+                <td>{{ item.booking_status }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+
+  <!-- =======================================================
+       TABLE VIEW
+       ======================================================= -->
+  <div id="tableView" class="panel">
+    <div class="overflow-x-auto">
+      <table class="data-table min-w-[1120px]">
+        <thead>
+          <tr>
+            <th style="width:52px;">№</th>
+            <th style="width:110px;">От</th>
+            <th style="width:110px;">До</th>
+            <th>Име</th>
+            <th style="width:145px;">Телефон</th>
+            <th style="width:85px;">Място</th>
+            <th style="width:225px;">Информация</th>
+            <th style="width:125px;">Качване</th>
+            <th style="width:150px;">Плащане</th>
+          </tr>
+        </thead>
+
+        <tbody id="rowsDriver"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- =======================================================
+       CARD VIEW — BETTER FOR TABLETS
+       ======================================================= -->
+  <div id="cardView" class="cards hidden"></div>
+
+  <!-- =======================================================
+       ROUTE + CASH SUMMARY
+       ======================================================= -->
+  <div class="summary-grid-lower">
+    <div class="summary-card">
+      <div class="summary-title">
+        ОТ — брой пътници
+      </div>
+
+      <table class="small-summary-table">
+        <thead>
+          <tr>
+            <th>Град</th>
+            <th class="text-right">Брой</th>
+          </tr>
+        </thead>
+
         <tbody id="sumFrom"></tbody>
       </table>
     </div>
 
-    <div class="sumCard">
-      <div class="sumTitle">ДО (бр. пътници)</div>
-      <table class="sumTbl">
-        <thead><tr><th>Град</th><th style="text-align:right">Брой</th></tr></thead>
+    <div class="summary-card">
+      <div class="summary-title">
+        ДО — брой пътници
+      </div>
+
+      <table class="small-summary-table">
+        <thead>
+          <tr>
+            <th>Град</th>
+            <th class="text-right">Брой</th>
+          </tr>
+        </thead>
+
         <tbody id="sumTo"></tbody>
       </table>
     </div>
 
-    <div class="sumCard">
-      <div class="sumTitle">Суми</div>
-
-      <div class="totals">
-        <div class="totRow"><div class="totLabel">Очаквани EUR</div><div class="totValue" id="expEUR">0.00</div></div>
-        <div class="totRow"><div class="totLabel">Очаквани UAH</div><div class="totValue" id="expUAH">0.00</div></div>
-
-        <div class="totDivider"></div>
-
-        <div class="totRow"><div class="totLabel">Реални EUR</div><div class="totValue" id="actEUR">0.00</div></div>
-        <div class="totRow"><div class="totLabel">Реални UAH</div><div class="totValue" id="actUAH">0.00</div></div>
+    <div class="summary-card">
+      <div class="summary-title">
+        Суми
       </div>
 
-      <div class="sumHint">
-        Очаквани = <b>amountDue</b> (ако има), иначе парс от Инфо (voucherRaw).<br/>
-        Ако има <b>PAYMENT APPROVED</b>, пътникът не участва в Очаквани.<br/>
-        Реални = amount по валутата от системата.
+      <div class="totals">
+        <div class="total-row">
+          <div class="total-label">
+            Очаквани EUR
+          </div>
+
+          <div id="expEUR" class="total-value">
+            0.00
+          </div>
+        </div>
+
+        <div class="total-row">
+          <div class="total-label">
+            Очаквани UAH
+          </div>
+
+          <div id="expUAH" class="total-value">
+            0.00
+          </div>
+        </div>
+
+        <div class="total-divider"></div>
+
+        <div class="total-row">
+          <div class="total-label">
+            Реални EUR
+          </div>
+
+          <div id="actEUR" class="total-value text-emerald-700">
+            0.00
+          </div>
+        </div>
+
+        <div class="total-row">
+          <div class="total-label">
+            Реални UAH
+          </div>
+
+          <div id="actUAH" class="total-value text-emerald-700">
+            0.00
+          </div>
+        </div>
+      </div>
+
+      <div class="summary-hint mt-3">
+        Очаквани суми: от amountDue или информацията в реда.<br>
+        Потвърдените онлайн плащания не се включват като сума за събиране.<br>
+        Реални суми: записаните плащания в касата.
       </div>
     </div>
   </div>
 </div>
 
-<div id="cardView" class="cards hidden"></div>
-
 <script>
   window.__DISABLE_LEGACY_APP_JS__ = true;
+
   window.DRIVER_TRIP_ID = {{ trip.id | tojson }};
   window.DRIVER_ROUTE_FROM = {{ (trip.route_from or "") | tojson }};
   window.DRIVER_ROUTE_TO = {{ (trip.route_to or "") | tojson }};
-  window.DRIVER_PASSENGERS_API = {{ ("/api/trips/" ~ trip.id ~ "/driver-passengers") | tojson }};
+
+  window.DRIVER_PASSENGERS_API = {{
+    ("/api/trips/" ~ trip.id ~ "/driver-passengers") | tojson
+  }};
 </script>
 
 <style>
-  .panel, .tbl, .filters, .importRow, .topbar { font-size: 13px; }
-  .btn, .chip, .search { font-size: 13px; }
-
-  .topbar{ display:flex; gap:12px; align-items:flex-start; margin-bottom:10px; }
-  .titleWrap{ display:flex; flex:1; gap:12px; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; }
-  .back{
-    text-decoration:none; color:#111; font-weight:600;
-    padding:10px 12px; border-radius:12px; background:#f2f2f3; white-space:nowrap;
-  }
-  .title .t1{ font-weight:900; font-size:15px; line-height:1; margin-top:2px; }
-  .title .t2{ color:#555; font-size:14px; margin-top:4px; }
-  .metaChips{ display:flex; gap:8px; flex-wrap:wrap; }
-  .metaChip{
-    display:inline-flex; align-items:center; gap:6px;
-    border:1px solid #e3e3e6; border-radius:999px; padding:8px 10px;
-    background:#fff; color:#333; font-size:12px; font-weight:800;
-  }
-  .metaChip.live{ background:#ecfeff; border-color:#a5f3fc; color:#155e75; }
-  .metaChip.muted{ color:#666; background:#f8f8f8; }
-
-  .panel{ background:#fff; border:1px solid #e8e8ea; border-radius:16px; padding:12px; margin:10px 0; }
-  .importRow{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
-  .btn{ border:1px solid #e3e3e6; background:#fff; border-radius:14px; padding:10px 12px; cursor:pointer; font-weight:800; }
-  .btn.ghost{ background:#f7f7f8; }
-  .btn:disabled{ opacity:.6; cursor:not-allowed; }
-
-  .status{ color:#666; font-size:13px; }
-
-  .filters{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
-  .search{ flex:1; min-width:220px; border:1px solid #e3e3e6; border-radius:14px; padding:10px 12px; font-size:15px; }
-  .chip{ display:inline-flex; gap:8px; align-items:center; border:1px solid #e3e3e6; border-radius:999px; padding:10px 12px; background:#fff; font-size:14px; }
-  .chip input{ width:18px; height:18px; }
-
-  .tbl{ width:100%; border-collapse:collapse; }
-  .tbl th, .tbl td{ border-bottom:1px solid #eee; padding:10px 8px; vertical-align:middle; white-space:normal; }
-  .tbl th{ text-align:left; font-size:13px; color:#444; position:sticky; top:0; background:#fff; }
-
-  .cards{ display:grid; gap:10px; }
-  .hidden{ display:none !important; }
-
-  .summaryGrid{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:12px; }
-  .sumCard{ border:1px solid #ececef; border-radius:16px; padding:12px; background:#fff; }
-  .sumTitle{ font-weight:900; font-size:14px; margin-bottom:8px; }
-  .sumTbl{ width:100%; border-collapse:collapse; }
-  .sumTbl th, .sumTbl td{ padding:6px 4px; border-bottom:1px solid #f0f0f2; font-size:13px; }
-  .sumTbl th{ color:#555; text-align:left; font-weight:900; }
-  .sumTbl td:last-child{ text-align:right; font-weight:900; }
-
-  .totals{ display:flex; flex-direction:column; gap:8px; }
-  .totRow{ display:flex; justify-content:space-between; gap:10px; }
-  .totLabel{ color:#555; font-weight:900; font-size:13px; }
-  .totValue{ font-weight:900; font-size:15px; }
-  .totDivider{ height:1px; background:#eee; margin:6px 0; }
-  .sumHint{ margin-top:10px; color:#777; font-size:12px; }
-
-  @media (max-width: 980px){
-    .summaryGrid{ grid-template-columns: 1fr; }
+  .hidden {
+    display: none !important;
   }
 
-  .payment-approved-badge{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    min-width:150px;
-    padding:5px 10px;
-    border-radius:999px;
-    border:1px solid #86efac;
-    background:#dcfce7;
-    color:#166534;
-    font-weight:900;
-    font-size:11px;
-    letter-spacing:.02em;
-    text-transform:uppercase;
+  .driver-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .back-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    border-radius: 12px;
+    background: #f1f5f9;
+    padding: 10px 12px;
+    color: #0f172a;
+    font-size: 14px;
+    font-weight: 800;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .back-btn:hover {
+    background: #e2e8f0;
+  }
+
+  .meta-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    background: #ffffff;
+    padding: 7px 10px;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .meta-chip.live {
+    border-color: #a7f3d0;
+    background: #ecfdf5;
+    color: #047857;
+  }
+
+  .panel,
+  .action-panel {
+    margin: 12px 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 18px;
+    background: #ffffff;
+    padding: 14px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+  }
+
+  .sticky-actions {
+    position: sticky;
+    top: 8px;
+    z-index: 20;
+  }
+
+  .primary-scan-btn {
+    display: inline-flex;
+    min-height: 52px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    background: #2563eb;
+    padding: 12px 18px;
+    color: #ffffff;
+    font-size: 15px;
+    font-weight: 900;
+    text-decoration: none;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.10);
+  }
+
+  .primary-scan-btn:hover {
+    background: #1d4ed8;
+  }
+
+  .action-btn {
+    display: inline-flex;
+    min-height: 48px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #cbd5e1;
+    border-radius: 14px;
+    background: #ffffff;
+    padding: 11px 14px;
+    color: #334155;
+    font-size: 14px;
+    font-weight: 800;
+    cursor: pointer;
+  }
+
+  .action-btn:hover {
+    background: #f8fafc;
+  }
+
+  .action-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .status-text {
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .search-input {
+    min-width: 230px;
+    flex: 1;
+    border: 1px solid #cbd5e1;
+    border-radius: 14px;
+    background: #ffffff;
+    padding: 11px 13px;
+    color: #0f172a;
+    font-size: 15px;
+  }
+
+  .filter-chip {
+    display: inline-flex;
+    min-height: 46px;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #ffffff;
+    padding: 9px 12px;
+    color: #334155;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .filter-chip input {
+    width: 19px;
+    height: 19px;
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .summary-grid-lower {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .summary-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    background: #ffffff;
+    padding: 14px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  }
+
+  .summary-label {
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .summary-value {
+    margin-top: 7px;
+    color: #0f172a;
+    font-size: 28px;
+    font-weight: 900;
+  }
+
+  .summary-title {
+    margin-bottom: 8px;
+    color: #0f172a;
+    font-size: 14px;
+    font-weight: 900;
+  }
+
+  .summary-hint {
+    margin-top: 7px;
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .warning-panel {
+    border-color: #fcd34d;
+    background: #fffbeb;
+  }
+
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .data-table th,
+  .data-table td {
+    border-bottom: 1px solid #e5e7eb;
+    padding: 10px 8px;
+    vertical-align: middle;
+    white-space: normal;
+    font-size: 13px;
+  }
+
+  .data-table th {
+    position: sticky;
+    top: 0;
+    background: #ffffff;
+    color: #475569;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .small-summary-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .small-summary-table th,
+  .small-summary-table td {
+    border-bottom: 1px solid #f1f5f9;
+    padding: 7px 4px;
+    font-size: 13px;
+  }
+
+  .small-summary-table th {
+    color: #64748b;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 900;
+  }
+
+  .small-summary-table td:last-child {
+    text-align: right;
+    font-weight: 900;
+  }
+
+  .cards {
+    display: grid;
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .passenger-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 18px;
+    background: #ffffff;
+    padding: 15px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+  }
+
+  .passenger-card-title {
+    color: #0f172a;
+    font-size: 16px;
+    font-weight: 900;
+  }
+
+  .passenger-card-sub {
+    margin-top: 5px;
+    color: #64748b;
+    font-size: 14px;
+  }
+
+  .card-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .card-meta-item {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #f8fafc;
+    padding: 10px;
+  }
+
+  .card-meta-label {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .card-meta-value {
+    margin-top: 4px;
+    color: #0f172a;
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .badge-stack {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
   }
 
   .status-badge,
   .cash-badge,
   .pending-badge,
-  .refused-badge{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    min-width:92px;
-    padding:5px 10px;
-    border-radius:999px;
-    font-weight:900;
-    font-size:11px;
-    letter-spacing:.02em;
-    text-transform:uppercase;
+  .refused-badge,
+  .oebb-badge,
+  .blacklist-badge,
+  .payment-approved-badge,
+  .missing-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
   }
 
-  .status-badge{
-    border:1px solid #86efac;
-    background:#dcfce7;
-    color:#166534;
+  .status-badge {
+    border: 1px solid #86efac;
+    background: #dcfce7;
+    color: #166534;
   }
 
-  .pending-badge{
-    border:1px solid #cbd5e1;
-    background:#f8fafc;
-    color:#475569;
+  .cash-badge {
+    border: 1px solid #bfdbfe;
+    background: #eff6ff;
+    color: #1d4ed8;
   }
 
-  .refused-badge{
-    border:1px solid #fca5a5;
-    background:#fef2f2;
-    color:#991b1b;
+  .pending-badge {
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    color: #475569;
   }
 
-  .cash-badge{
-    border:1px solid #bfdbfe;
-    background:#eff6ff;
-    color:#1d4ed8;
+  .refused-badge,
+  .blacklist-badge,
+  .missing-badge {
+    border: 1px solid #fca5a5;
+    background: #fef2f2;
+    color: #991b1b;
   }
 
-  .oebb-badge{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    min-width:70px;
-    padding:5px 10px;
-    border-radius:999px;
-    border:1px solid #fcd34d;
-    background:#fffbeb;
-    color:#92400e;
-    font-weight:900;
-    font-size:11px;
-    letter-spacing:.02em;
-    text-transform:uppercase;
+  .oebb-badge {
+    border: 1px solid #fcd34d;
+    background: #fffbeb;
+    color: #92400e;
   }
 
-  .blacklist-badge{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    min-width:88px;
-    padding:5px 10px;
-    border-radius:999px;
-    border:1px solid #fca5a5;
-    background:#fef2f2;
-    color:#991b1b;
-    font-weight:900;
-    font-size:11px;
-    letter-spacing:.02em;
-    text-transform:uppercase;
+  .payment-approved-badge {
+    border: 1px solid #86efac;
+    background: #dcfce7;
+    color: #166534;
   }
 
-  .info-stack{
-    display:flex;
-    flex-wrap:wrap;
-    gap:6px;
-    align-items:center;
+  .totals {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
 
-  .p-card{
-    background:#fff;
-    border:1px solid #e8e8ea;
-    border-radius:16px;
-    padding:12px;
+  .total-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
   }
-  .p-title{ font-weight:800; }
-  .p-sub{ margin-top:4px; color:#555; }
-  .p-sub.muted{ color:#777; word-break:break-word; }
-  .p-oebb{ margin-top:8px; }
-  .p-payment{ margin-top:8px; }
-  .p-blacklist{ margin-top:8px; }
 
-  @media print{
-    .back, .importRow, .filters, #cardView { display:none !important; }
-    #tableView { display:block !important; }
-    .panel{ border:none; padding:0; margin:0; }
-    body{ background:#fff !important; }
+  .total-label {
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 800;
+  }
 
-    .tbl{ display:table !important; width:100% !important; border-collapse:collapse !important; }
-    .tbl thead{ display:table-header-group !important; }
-    .tbl tbody{ display:table-row-group !important; }
-    .tbl tr{ display:table-row !important; }
-    .tbl th, .tbl td{ display:table-cell !important; white-space:nowrap !important; padding:6px 6px !important; }
-    .tbl td::before{ content:none !important; display:none !important; }
-    .tbl th{ position:static !important; }
+  .total-value {
+    color: #0f172a;
+    font-size: 15px;
+    font-weight: 900;
+  }
 
-    .summaryGrid{ grid-template-columns:1fr 1fr 1fr !important; }
+  .total-divider {
+    height: 1px;
+    margin: 5px 0;
+    background: #e2e8f0;
+  }
+
+  @media (max-width: 1050px) {
+    .summary-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .summary-grid-lower {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .summary-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .primary-scan-btn {
+      width: 100%;
+    }
+
+    .action-btn {
+      flex: 1;
+    }
+
+    .status-text {
+      width: 100%;
+    }
+
+    .card-meta-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media print {
+    .back-btn,
+    .action-panel,
+    .filters,
+    #cardView {
+      display: none !important;
+    }
+
+    body {
+      background: #ffffff !important;
+    }
+
+    #tableView {
+      display: block !important;
+      border: none !important;
+      box-shadow: none !important;
+      padding: 0 !important;
+    }
+
+    .panel {
+      border: none;
+      box-shadow: none;
+    }
+
+    .data-table {
+      display: table !important;
+      width: 100% !important;
+      border-collapse: collapse !important;
+    }
+
+    .data-table thead {
+      display: table-header-group !important;
+    }
+
+    .data-table tbody {
+      display: table-row-group !important;
+    }
+
+    .data-table tr {
+      display: table-row !important;
+    }
+
+    .data-table th,
+    .data-table td {
+      display: table-cell !important;
+      padding: 6px !important;
+      white-space: nowrap !important;
+    }
+
+    .data-table th {
+      position: static !important;
+    }
+
+    .summary-grid-lower {
+      grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    }
   }
 </style>
 
 <script>
-console.log("DRIVER trip_detail script ✅");
+(function () {
+  console.log("driver_trip_detail live view loaded");
 
-function coalesce(...vals){
-  for (const v of vals){
-    if (v !== undefined && v !== null) return v;
+  const tripId = Number(window.DRIVER_TRIP_ID || 0);
+
+  let passengers = [];
+
+  /*
+    На таблет и телефон card view е по-удобен.
+    На desktop първоначално се показва таблицата.
+  */
+  let view = window.matchMedia("(max-width: 900px)").matches
+    ? "cards"
+    : "table";
+
+  function coalesce(...values) {
+    for (const value of values) {
+      if (value !== undefined && value !== null) {
+        return value;
+      }
+    }
+
+    return null;
   }
-  return null;
-}
 
-function normalizePassenger(p){
-  return {
-    id: coalesce(p.id, null),
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
 
-    passengerNo: coalesce(p.passengerNo, p.passenger_no, ""),
-    fromCity: coalesce(p.fromCity, p.effectiveFromCity, p.manualFromCity, p.from_city, ""),
-    toCity: coalesce(p.toCity, p.effectiveToCity, p.manualToCity, p.to_city, ""),
-    fullName: coalesce(p.fullName, p.effectiveFullName, p.manualFullName, p.full_name, ""),
-    phone: coalesce(p.phone, p.effectivePhone, p.manualPhone, ""),
-    seatNo: coalesce(p.seatNo, p.effectiveSeatNo, p.manualSeatNo, p.seat_no, ""),
-    voucherRaw: coalesce(p.voucherRaw, p.effectiveVoucherRaw, p.manualVoucherRaw, p.voucher_or_amount_raw, ""),
-    voucherCode: coalesce(p.voucherCode, p.voucher_code, ""),
+  function cleanExcelIntLike(value) {
+    if (value === null || value === undefined) {
+      return "";
+    }
 
-    amountDue: coalesce(p.amountDue, p.amount_due, null),
-    checkedIn: !!coalesce(p.checkedIn, p.checked_in, false),
-    paid: !!coalesce(p.paid, false),
-    amount: coalesce(p.amount, null),
-    currency: coalesce(p.currency, "EUR"),
-    oebb: !!coalesce(p.oebb, false),
+    const text = String(value).trim();
 
-    paymentApproved: !!coalesce(p.paymentApproved, false),
-    paymentBadgeLabel: coalesce(p.paymentBadgeLabel, "PAYMENT APPROVED"),
+    if (!text) {
+      return "";
+    }
 
-    badClient: !!coalesce(p.badClient, false),
-    badReason: coalesce(p.badReason, ""),
-    badCount: coalesce(p.badCount, 0),
-    badMatchedBy: coalesce(p.badMatchedBy, ""),
+    return text.replace(/([.,])0+$/, "");
+  }
 
-    boardingStatus: coalesce(p.boardingStatus, p.boarding_status, "pending"),
-    refusedReason: coalesce(p.refusedReason, p.refused_reason, ""),
-    oebbChecked: !!coalesce(p.oebbChecked, p.oebb_checked, false),
-    cashCollectedAmount: coalesce(p.cashCollectedAmount, p.cash_collected_amount, null),
-    cashCollectedCurrency: coalesce(p.cashCollectedCurrency, p.cash_collected_currency, ""),
+  function parseMoney(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (typeof value === "number") {
+      return Number.isFinite(value)
+        ? value
+        : null;
+    }
+
+    let text = String(value).trim();
+
+    if (!text) {
+      return null;
+    }
+
+    text = text
+      .replace(/[^\d.,-]/g, "")
+      .replace(/\s+/g, "");
+
+    if (text.includes(",") && text.includes(".")) {
+      text = text.replace(/\./g, "");
+    }
+
+    text = text.replace(/,/g, ".");
+
+    const parsed = Number(text);
+
+    return Number.isFinite(parsed)
+      ? parsed
+      : null;
+  }
+
+  function inferCurrencyFromRaw(rawValue) {
+    const text = String(rawValue ?? "").toLowerCase();
+
+    if (/(грн|uah|₴|гривн(?:а|и)?)/i.test(text)) {
+      return "UAH";
+    }
+
+    if (/(євро|евро|eur|€)/i.test(text)) {
+      return "EUR";
+    }
+
+    return "EUR";
+  }
+
+  function parseExpectedFromInfo(rawValue) {
+    const text = String(rawValue ?? "").trim();
+
+    if (!text) {
+      return {
+        due: null,
+        cur: null
+      };
+    }
+
+    if (/(€|eur|євро|евро)/iu.test(text)) {
+      const match = text.match(/(\d[\d\s]*([.,]\d{1,2})?)/);
+      const amount = match
+        ? parseMoney(match[1])
+        : null;
+
+      if (amount !== null && amount > 0 && amount <= 2000) {
+        return {
+          due: amount,
+          cur: "EUR"
+        };
+      }
+
+      return {
+        due: null,
+        cur: "EUR"
+      };
+    }
+
+    if (/(uah|грн|гривн(?:а|и)?|₴)/iu.test(text)) {
+      const match = text.match(/(\d[\d\s]*([.,]\d{1,2})?)/);
+      const amount = match
+        ? parseMoney(match[1])
+        : null;
+
+      if (amount !== null && amount > 0) {
+        return {
+          due: amount,
+          cur: "UAH"
+        };
+      }
+
+      return {
+        due: null,
+        cur: "UAH"
+      };
+    }
+
+    const plainNumberMatch = text.match(
+      /^\s*(\d{1,4})(?:[.,](\d{1,2}))?\s*$/
+    );
+
+    if (!plainNumberMatch) {
+      return {
+        due: null,
+        cur: null
+      };
+    }
+
+    const integerPart = plainNumberMatch[1];
+    const decimalPart = plainNumberMatch[2] || "";
+
+    if (decimalPart && !/^0{1,2}$/.test(decimalPart)) {
+      return {
+        due: null,
+        cur: null
+      };
+    }
+
+    const amount = Number(
+      integerPart + (decimalPart ? "." + decimalPart : "")
+    );
+
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      amount > 2000
+    ) {
+      return {
+        due: null,
+        cur: null
+      };
+    }
+
+    return {
+      due: amount,
+      cur: "EUR"
+    };
+  }
+
+  function normalizePassenger(rawPassenger) {
+    return {
+      id: coalesce(
+        rawPassenger.id,
+        null
+      ),
+
+      passengerNo: coalesce(
+        rawPassenger.passengerNo,
+        rawPassenger.passenger_no,
+        ""
+      ),
+
+      fromCity: coalesce(
+        rawPassenger.fromCity,
+        rawPassenger.effectiveFromCity,
+        rawPassenger.manualFromCity,
+        rawPassenger.from_city,
+        ""
+      ),
+
+      toCity: coalesce(
+        rawPassenger.toCity,
+        rawPassenger.effectiveToCity,
+        rawPassenger.manualToCity,
+        rawPassenger.to_city,
+        ""
+      ),
+
+      fullName: coalesce(
+        rawPassenger.fullName,
+        rawPassenger.effectiveFullName,
+        rawPassenger.manualFullName,
+        rawPassenger.full_name,
+        ""
+      ),
+
+      phone: coalesce(
+        rawPassenger.phone,
+        rawPassenger.effectivePhone,
+        rawPassenger.manualPhone,
+        ""
+      ),
+
+      seatNo: coalesce(
+        rawPassenger.seatNo,
+        rawPassenger.effectiveSeatNo,
+        rawPassenger.manualSeatNo,
+        rawPassenger.seat_no,
+        ""
+      ),
+
+      voucherRaw: coalesce(
+        rawPassenger.voucherRaw,
+        rawPassenger.effectiveVoucherRaw,
+        rawPassenger.manualVoucherRaw,
+        rawPassenger.voucher_or_amount_raw,
+        ""
+      ),
+
+      voucherCode: coalesce(
+        rawPassenger.voucherCode,
+        rawPassenger.voucher_code,
+        ""
+      ),
+
+      amountDue: coalesce(
+        rawPassenger.amountDue,
+        rawPassenger.amount_due,
+        null
+      ),
+
+      checkedIn: Boolean(
+        coalesce(
+          rawPassenger.checkedIn,
+          rawPassenger.checked_in,
+          false
+        )
+      ),
+
+      paid: Boolean(
+        coalesce(
+          rawPassenger.paid,
+          false
+        )
+      ),
+
+      amount: coalesce(
+        rawPassenger.amount,
+        null
+      ),
+
+      currency: String(
+        coalesce(
+          rawPassenger.currency,
+          "EUR"
+        )
+      ).toUpperCase(),
+
+      oebb: Boolean(
+        coalesce(
+          rawPassenger.oebb,
+          false
+        )
+      ),
+
+      paymentApproved: Boolean(
+        coalesce(
+          rawPassenger.paymentApproved,
+          false
+        )
+      ),
+
+      paymentBadgeLabel: coalesce(
+        rawPassenger.paymentBadgeLabel,
+        "PAYMENT APPROVED"
+      ),
+
+      badClient: Boolean(
+        coalesce(
+          rawPassenger.badClient,
+          false
+        )
+      ),
+
+      badReason: coalesce(
+        rawPassenger.badReason,
+        ""
+      ),
+
+      badCount: Number(
+        coalesce(
+          rawPassenger.badCount,
+          0
+        )
+      ),
+
+      badMatchedBy: coalesce(
+        rawPassenger.badMatchedBy,
+        ""
+      ),
+
+      boardingStatus: coalesce(
+        rawPassenger.boardingStatus,
+        rawPassenger.boarding_status,
+        "pending"
+      ),
+
+      refusedReason: coalesce(
+        rawPassenger.refusedReason,
+        rawPassenger.refused_reason,
+        ""
+      ),
+
+      oebbChecked: Boolean(
+        coalesce(
+          rawPassenger.oebbChecked,
+          rawPassenger.oebb_checked,
+          false
+        )
+      ),
+
+      cashCollectedAmount: coalesce(
+        rawPassenger.cashCollectedAmount,
+        rawPassenger.cash_collected_amount,
+        null
+      ),
+
+      cashCollectedCurrency: coalesce(
+        rawPassenger.cashCollectedCurrency,
+        rawPassenger.cash_collected_currency,
+        ""
+      )
+    };
+  }
+
+  function isEffectivelyPaid(passenger) {
+    return Boolean(
+      passenger.paymentApproved ||
+      passenger.paid
+    );
+  }
+
+  function isCheckedIn(passenger) {
+    return Boolean(
+      passenger.boardingStatus === "checked_in" ||
+      passenger.checkedIn
+    );
+  }
+
+  function renderBoardingStatus(passenger) {
+    if (isCheckedIn(passenger)) {
+      return `
+        <span class="status-badge">
+          Чекиран
+        </span>
+      `;
+    }
+
+    if (passenger.boardingStatus === "refused") {
+      return `
+        <span
+          class="refused-badge"
+          title="${escapeHtml(passenger.refusedReason || "")}">
+          Отказан
+        </span>
+      `;
+    }
+
+    return `
+      <span class="pending-badge">
+        Чака
+      </span>
+    `;
+  }
+
+  function renderCashStatus(passenger) {
+    if (passenger.paymentApproved) {
+      return `
+        <span class="cash-badge">
+          Online paid
+        </span>
+      `;
+    }
+
+    if (passenger.paid) {
+      const amount = parseMoney(
+        passenger.cashCollectedAmount ??
+        passenger.amount
+      );
+
+      const currency = escapeHtml(
+        String(
+          passenger.cashCollectedCurrency ||
+          passenger.currency ||
+          "EUR"
+        ).toUpperCase()
+      );
+
+      if (amount !== null) {
+        return `
+          <span class="cash-badge">
+            Платен ${amount.toFixed(2)} ${currency}
+          </span>
+        `;
+      }
+
+      return `
+        <span class="cash-badge">
+          Платен
+        </span>
+      `;
+    }
+
+    return `
+      <span class="pending-badge">
+        Неплатен
+      </span>
+    `;
+  }
+
+  function renderInfoCellValue(passenger) {
+    const parts = [];
+
+    if (passenger.paymentApproved) {
+      parts.push(`
+        <span class="payment-approved-badge">
+          ${escapeHtml(
+            passenger.paymentBadgeLabel ||
+            "PAYMENT APPROVED"
+          )}
+        </span>
+      `);
+    } else {
+      const voucherValue = cleanExcelIntLike(
+        passenger.voucherRaw ||
+        ""
+      );
+
+      if (voucherValue) {
+        parts.push(`
+          <span>
+            ${escapeHtml(voucherValue)}
+          </span>
+        `);
+      }
+    }
+
+    if (passenger.badClient) {
+      const tooltip = [
+        passenger.badReason
+          ? `Причина: ${passenger.badReason}`
+          : "",
+
+        passenger.badCount
+          ? `Брой: ${passenger.badCount}`
+          : "",
+
+        passenger.badMatchedBy
+          ? `Match: ${passenger.badMatchedBy}`
+          : ""
+      ]
+        .filter(Boolean)
+        .join(" • ");
+
+      parts.push(`
+        <span
+          class="blacklist-badge"
+          title="${escapeHtml(tooltip)}">
+          Blacklist
+        </span>
+      `);
+    }
+
+    if (
+      passenger.oebbChecked ||
+      passenger.oebb
+    ) {
+      parts.push(`
+        <span class="oebb-badge">
+          ÖBB
+        </span>
+      `);
+    }
+
+    return `
+      <div class="badge-stack">
+        ${parts.join("") || "<span>—</span>"}
+      </div>
+    `;
+  }
+
+  function normalizeCityText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .trim()
+      .replace(/[._,;:/\\()-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .normalize("NFC");
+  }
+
+  function foldLatinAccents(value) {
+    return String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .normalize("NFC");
+  }
+
+  const CITY_ALIASES = {
+    innsbruck: [
+      "innsbruck",
+      "інсбрук",
+      "инсбрук"
+    ],
+
+    salzburg: [
+      "salzburg",
+      "зальцбург",
+      "salzburg sud",
+      "salzburgsud"
+    ],
+
+    wels: [
+      "wels",
+      "вельс"
+    ],
+
+    linz: [
+      "linz",
+      "лінц",
+      "линц"
+    ],
+
+    stpolten: [
+      "st polten",
+      "st pölten",
+      "sankt polten",
+      "st. polten",
+      "ст полтен",
+      "ст.полтен"
+    ],
+
+    wien: [
+      "wien",
+      "vienna",
+      "відень",
+      "видень",
+      "вiдень"
+    ],
+
+    villach: [
+      "villach",
+      "філлах",
+      "филлах"
+    ],
+
+    klagenfurt: [
+      "klagenfurt",
+      "клагенфурт"
+    ],
+
+    graz: [
+      "graz",
+      "грац"
+    ],
+
+    bruck: [
+      "bruck",
+      "брук"
+    ],
+
+    kyiv: [
+      "kyiv",
+      "kiev",
+      "київ",
+      "киев"
+    ],
+
+    zhytomyr: [
+      "zhytomyr",
+      "zhitomir",
+      "житомир"
+    ],
+
+    rivne: [
+      "rivne",
+      "rovno",
+      "рівне",
+      "ривне",
+      "ровно"
+    ],
+
+    lviv: [
+      "lviv",
+      "lvov",
+      "львів",
+      "львов"
+    ]
   };
-}
 
-function isEffectivelyPaid(p){
-  return !!(p.paymentApproved || p.paid);
-}
+  function cityAliasMatches(inputValue, aliasValue) {
+    const input = normalizeCityText(inputValue);
+    const alias = normalizeCityText(aliasValue);
 
-function renderBoardingStatus(p){
-  if (p.boardingStatus === "checked_in" || p.checkedIn){
-    return `<span class="status-badge">Чекиран</span>`;
-  }
-  if (p.boardingStatus === "refused"){
-    const title = String(p.refusedReason || "").replace(/"/g, "&quot;");
-    return `<span class="refused-badge" title="${title}">Отказан</span>`;
-  }
-  return `<span class="pending-badge">Чака</span>`;
-}
-
-function renderCashStatus(p){
-  if (p.paymentApproved){
-    return `<span class="cash-badge">Online paid</span>`;
-  }
-
-  if (p.paid){
-    const amount = parseMoney(p.cashCollectedAmount ?? p.amount);
-    const currency = String(p.cashCollectedCurrency || p.currency || "EUR").toUpperCase();
-    if (amount != null){
-      return `<span class="cash-badge">Платен ${amount.toFixed(2)} ${currency}</span>`;
+    if (!input || !alias) {
+      return false;
     }
-    return `<span class="cash-badge">Платен</span>`;
-  }
 
-  return `<span class="pending-badge">Неплатен</span>`;
-}
-
-async function fetchPassengers(tripId){
-  const url = window.DRIVER_PASSENGERS_API || `/api/trips/${tripId}/driver-passengers`;
-  const res = await fetch(url, { credentials:"same-origin" });
-  const data = await res.json().catch(() => ([]));
-  if (!res.ok) throw new Error((data && data.detail) || ("fetchPassengers failed: " + res.status));
-  if (!Array.isArray(data)) return [];
-  return data.map(normalizePassenger);
-}
-
-function matchesFilter(p, q, onlyUnchecked, onlyUnpaid){
-  if (onlyUnchecked && (p.boardingStatus === "checked_in" || p.checkedIn)) return false;
-  if (onlyUnpaid && isEffectivelyPaid(p)) return false;
-  if (!q) return true;
-  const qq = q.toLowerCase();
-  return (
-    (p.fullName || "").toLowerCase().includes(qq) ||
-    (p.phone || "").toLowerCase().includes(qq) ||
-    (p.seatNo || "").toLowerCase().includes(qq) ||
-    (p.voucherRaw || "").toLowerCase().includes(qq) ||
-    (p.fromCity || "").toLowerCase().includes(qq) ||
-    (p.toCity || "").toLowerCase().includes(qq) ||
-    (p.badReason || "").toLowerCase().includes(qq)
-  );
-}
-
-function cleanExcelIntLike(v){
-  if (v === null || v === undefined) return "";
-  let s = String(v).trim();
-  if (!s) return "";
-  return s.replace(/([.,])0+$/, "");
-}
-
-function parseMoney(v){
-  if (v === null || v === undefined) return null;
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  let s = String(v).trim();
-  if (!s) return null;
-  s = s.replace(/[^\d.,-]/g, "").replace(/\s+/g, "");
-  if (s.includes(",") && s.includes(".")) s = s.replace(/\./g, "");
-  s = s.replace(/,/g, ".");
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
-
-function inferCurrencyFromRaw(raw){
-  const s = String(raw ?? "").toLowerCase();
-  if (/(грн|uah|₴|гривн(?:а|и)?)/i.test(s)) return "UAH";
-  if (/(євро|евро|eur|€)/i.test(s)) return "EUR";
-  return "EUR";
-}
-
-function parseExpectedFromInfo(raw){
-  const s = String(raw ?? "").trim();
-  if (!s) return { due: null, cur: null };
-
-  if (/(€|eur|євро|евро)/iu.test(s)) {
-    const m = s.match(/(\d[\d\s]*([.,]\d{1,2})?)/);
-    const n = m ? parseMoney(m[1]) : null;
-    if (n != null && n > 0 && n <= 2000) return { due: n, cur: "EUR" };
-    return { due: null, cur: "EUR" };
-  }
-  if (/(uah|грн|гривн(?:а|и)?|₴)/iu.test(s)) {
-    const m = s.match(/(\d[\d\s]*([.,]\d{1,2})?)/);
-    const n = m ? parseMoney(m[1]) : null;
-    if (n != null && n > 0) return { due: n, cur: "UAH" };
-    return { due: null, cur: "UAH" };
-  }
-
-  const m2 = s.match(/^\s*(\d{1,4})(?:[.,](\d{1,2}))?\s*$/);
-  if (!m2) return { due: null, cur: null };
-  const intPart = m2[1];
-  const decPart = m2[2] || "";
-  if (decPart && !/^0{1,2}$/.test(decPart)) return { due: null, cur: null };
-  const n2 = Number(intPart + (decPart ? "." + decPart : ""));
-  if (!Number.isFinite(n2) || n2 <= 0 || n2 > 2000) return { due: null, cur: null };
-  return { due: n2, cur: "EUR" };
-}
-
-function renderInfoCellValue(p){
-  const parts = [];
-
-  if (p.paymentApproved){
-    parts.push(`<span class="payment-approved-badge">${p.paymentBadgeLabel || "PAYMENT APPROVED"}</span>`);
-  } else if (cleanExcelIntLike(p.voucherRaw || "")) {
-    parts.push(`<span>${cleanExcelIntLike(p.voucherRaw || "")}</span>`);
-  }
-
-  if (p.badClient){
-    const title = [
-      p.badReason ? `Причина: ${p.badReason}` : "",
-      p.badCount ? `Брой: ${p.badCount}` : "",
-      p.badMatchedBy ? `Match: ${p.badMatchedBy}` : ""
-    ].filter(Boolean).join(" • ");
-    parts.push(`<span class="blacklist-badge" title="${title.replace(/"/g, '&quot;')}">Blacklist</span>`);
-  }
-
-  if (p.oebbChecked || p.oebb){
-    parts.push(`<span class="oebb-badge">OEBB</span>`);
-  }
-
-  return `<div class="info-stack">${parts.join("") || `<span>—</span>`}</div>`;
-}
-
-function normCityText(v){
-  return String(v || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[._,;:/\\()-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .normalize("NFC");
-}
-
-function foldLatinAccents(s){
-  return String(s || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .normalize("NFC");
-}
-
-const CITY_ALIASES = {
-  innsbruck: ["innsbruck", "інсбрук", "инсбрук"],
-  salzburg: ["salzburg", "зальцбург", "salzburg sud", "salzburgsud"],
-  wels: ["wels", "вельс"],
-  linz: ["linz", "лінц", "линц"],
-  stpolten: ["st polten", "st pölten", "sankt polten", "st. polten", "ст полтен", "ст.полтен"],
-  wien: ["wien", "vienna", "відень", "видень", "вiдень"],
-
-  villach: ["villach", "філлах", "филлах"],
-  klagenfurt: ["klagenfurt", "клагенфурт"],
-  graz: ["graz", "грац"],
-  bruck: ["bruck", "брук"],
-
-  kyiv: ["kyiv", "kiev", "київ", "киев"],
-  zhytomyr: ["zhytomyr", "zhitomir", "житомир"],
-  rivne: ["rivne", "rovno", "рівне", "ривне", "ровно"],
-  lviv: ["lviv", "lvov", "львів", "львов"]
-};
-
-function cityAliasMatches(input, alias){
-  const s1 = normCityText(input);
-  const s2 = normCityText(alias);
-
-  if (!s1 || !s2) return false;
-  if (s1 === s2) return true;
-  if (s1.includes(s2)) return true;
-
-  const f1 = foldLatinAccents(s1);
-  const f2 = foldLatinAccents(s2);
-
-  return f1 === f2 || f1.includes(f2);
-}
-
-function canonicalCityKey(v){
-  const s = normCityText(v);
-  if (!s) return "";
-
-  for (const [key, aliases] of Object.entries(CITY_ALIASES)){
-    for (const alias of aliases){
-      if (cityAliasMatches(s, alias)) return key;
+    if (input === alias) {
+      return true;
     }
+
+    if (input.includes(alias)) {
+      return true;
+    }
+
+    const foldedInput = foldLatinAccents(input);
+    const foldedAlias = foldLatinAccents(alias);
+
+    return (
+      foldedInput === foldedAlias ||
+      foldedInput.includes(foldedAlias)
+    );
   }
 
-  return s;
-}
+  function canonicalCityKey(value) {
+    const normalized = normalizeCityText(value);
 
-function getCurrentRouteCode(){
-  const rf = canonicalCityKey(window.DRIVER_ROUTE_FROM || "");
-  const rt = canonicalCityKey(window.DRIVER_ROUTE_TO || "");
+    if (!normalized) {
+      return "";
+    }
 
-  if (rf === "innsbruck" && rt === "kyiv") return "IK";
-  if (rf === "kyiv" && rt === "innsbruck") return "KI";
-  return "OTHER";
-}
-
-function getRouteSideOrders(){
-  const AT_ORDER = [
-    "innsbruck",
-    "salzburg",
-    "wels",
-    "linz",
-    "stpolten",
-    "wien",
-    "villach",
-    "klagenfurt",
-    "graz",
-    "bruck"
-  ];
-
-  const UA_ORDER = [
-    "kyiv",
-    "zhytomyr",
-    "rivne",
-    "lviv"
-  ];
-
-  const routeCode = getCurrentRouteCode();
-
-  if (routeCode === "IK"){
-    return { fromOrder: AT_ORDER, toOrder: UA_ORDER };
-  }
-  if (routeCode === "KI"){
-    return { fromOrder: UA_ORDER, toOrder: AT_ORDER };
-  }
-
-  return { fromOrder: [], toOrder: [] };
-}
-
-function cityOrderIndex(city, order){
-  const key = canonicalCityKey(city);
-  const idx = order.indexOf(key);
-  return idx === -1 ? 9999 : idx;
-}
-
-function compareCitiesByOrder(a, b, order){
-  const ai = cityOrderIndex(a, order);
-  const bi = cityOrderIndex(b, order);
-  if (ai !== bi) return ai - bi;
-  return String(a || "").localeCompare(String(b || ""), "bg");
-}
-
-function comparePassengersForRoute(a, b){
-  const { fromOrder, toOrder } = getRouteSideOrders();
-
-  const fromCmp = compareCitiesByOrder(a.fromCity, b.fromCity, fromOrder);
-  if (fromCmp !== 0) return fromCmp;
-
-  const toCmp = compareCitiesByOrder(a.toCity, b.toCity, toOrder);
-  if (toCmp !== 0) return toCmp;
-
-  const aSeat = cleanExcelIntLike(a.seatNo || "");
-  const bSeat = cleanExcelIntLike(b.seatNo || "");
-  const aSeatNum = /^\d+$/.test(aSeat) ? Number(aSeat) : 999999;
-  const bSeatNum = /^\d+$/.test(bSeat) ? Number(bSeat) : 999999;
-  if (aSeatNum !== bSeatNum) return aSeatNum - bSeatNum;
-
-  return String(a.fullName || "").localeCompare(String(b.fullName || ""), "bg");
-}
-
-function renderSummary(list){
-  const fromEl = document.getElementById("sumFrom");
-  const toEl   = document.getElementById("sumTo");
-  const expEUR = document.getElementById("expEUR");
-  const expUAH = document.getElementById("expUAH");
-  const actEUR = document.getElementById("actEUR");
-  const actUAH = document.getElementById("actUAH");
-  if (!fromEl || !toEl || !expEUR || !expUAH || !actEUR || !actUAH) return;
-
-  const fromCnt = new Map();
-  const toCnt   = new Map();
-  let expE=0, expU=0, actE=0, actU=0;
-
-  for (const p of list){
-    const fc = String(p.fromCity || "").trim();
-    const tc = String(p.toCity || "").trim();
-    if (fc) fromCnt.set(fc, (fromCnt.get(fc)||0)+1);
-    if (tc) toCnt.set(tc, (toCnt.get(tc)||0)+1);
-
-    if (!p.paymentApproved){
-      const due = parseMoney(p.amountDue);
-      const curDue = String(p.currency || inferCurrencyFromRaw(p.voucherRaw) || "EUR").toUpperCase();
-
-      if (due != null){
-        if (curDue === "UAH") expU += due; else expE += due;
-      } else {
-        const ex = parseExpectedFromInfo(p.voucherRaw);
-        if (ex.due != null && ex.cur){
-          if (ex.cur === "UAH") expU += ex.due; else expE += ex.due;
+    for (const [key, aliases] of Object.entries(CITY_ALIASES)) {
+      for (const alias of aliases) {
+        if (cityAliasMatches(normalized, alias)) {
+          return key;
         }
       }
     }
 
-    const curAct = String(p.cashCollectedCurrency || p.currency || inferCurrencyFromRaw(p.voucherRaw) || "EUR").toUpperCase();
-    const amt = parseMoney(p.cashCollectedAmount ?? p.amount);
-    if (amt != null){
-      if (curAct === "UAH") actU += amt; else actE += amt;
+    return normalized;
+  }
+
+  function getCurrentRouteCode() {
+    const routeFrom = canonicalCityKey(
+      window.DRIVER_ROUTE_FROM ||
+      ""
+    );
+
+    const routeTo = canonicalCityKey(
+      window.DRIVER_ROUTE_TO ||
+      ""
+    );
+
+    if (
+      routeFrom === "innsbruck" &&
+      routeTo === "kyiv"
+    ) {
+      return "IK";
     }
+
+    if (
+      routeFrom === "kyiv" &&
+      routeTo === "innsbruck"
+    ) {
+      return "KI";
+    }
+
+    return "OTHER";
   }
 
-  const { fromOrder, toOrder } = getRouteSideOrders();
+  function getRouteSideOrders() {
+    const AT_ORDER = [
+      "innsbruck",
+      "salzburg",
+      "wels",
+      "linz",
+      "stpolten",
+      "wien",
+      "villach",
+      "klagenfurt",
+      "graz",
+      "bruck"
+    ];
 
-  const sortEntriesByCustomOrder = (m, order) =>
-    [...m.entries()].sort((a, b) => {
-      const byOrder = compareCitiesByOrder(a[0], b[0], order);
-      if (byOrder !== 0) return byOrder;
-      return b[1] - a[1];
-    });
+    const UA_ORDER = [
+      "kyiv",
+      "zhytomyr",
+      "rivne",
+      "lviv"
+    ];
 
-  fromEl.innerHTML =
-    sortEntriesByCustomOrder(fromCnt, fromOrder).map(([city, c]) =>
-      `<tr><td>${city}</td><td style="text-align:right;font-weight:800">${c}</td></tr>`
-    ).join("") || `<tr><td colspan="2" style="color:#999">Няма</td></tr>`;
+    const routeCode = getCurrentRouteCode();
 
-  toEl.innerHTML =
-    sortEntriesByCustomOrder(toCnt, toOrder).map(([city, c]) =>
-      `<tr><td>${city}</td><td style="text-align:right;font-weight:800">${c}</td></tr>`
-    ).join("") || `<tr><td colspan="2" style="color:#999">Няма</td></tr>`;
+    if (routeCode === "IK") {
+      return {
+        fromOrder: AT_ORDER,
+        toOrder: UA_ORDER
+      };
+    }
 
-  expEUR.textContent = expE.toFixed(2);
-  expUAH.textContent = expU.toFixed(2);
-  actEUR.textContent = actE.toFixed(2);
-  actUAH.textContent = actU.toFixed(2);
-}
+    if (routeCode === "KI") {
+      return {
+        fromOrder: UA_ORDER,
+        toOrder: AT_ORDER
+      };
+    }
 
-let passengers = [];
-let view = "table";
-
-function getFilteredPassengers(){
-  const search = document.getElementById("search");
-  const onlyUnchecked = document.getElementById("onlyUnchecked");
-  const onlyUnpaid = document.getElementById("onlyUnpaid");
-  const q = (search?.value ?? "").trim();
-
-  return passengers
-    .filter((p) => matchesFilter(p, q, !!onlyUnchecked?.checked, !!onlyUnpaid?.checked))
-    .slice()
-    .sort(comparePassengersForRoute);
-}
-
-function renderTable(list){
-  const tbody = document.getElementById("rowsDriver");
-  if (!tbody) return;
-  tbody.innerHTML = "";
-
-  if (!list.length){
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan = 9;
-    td.style.color = "#777";
-    td.style.padding = "14px 8px";
-    td.textContent = "Няма пътници за показване.";
-    tr.appendChild(td);
-    tbody.appendChild(tr);
-    return;
-  }
-
-  list.forEach((p, idx) => {
-    const tr = document.createElement("tr");
-
-    const mk = (label, text) => {
-      const td = document.createElement("td");
-      td.setAttribute("data-label", label);
-      td.textContent = text ?? "";
-      return td;
+    return {
+      fromOrder: [],
+      toOrder: []
     };
-
-    tr.appendChild(mk("№", String(idx + 1)));
-    tr.appendChild(mk("От", p.fromCity || ""));
-    tr.appendChild(mk("До", p.toCity || ""));
-    tr.appendChild(mk("Име", p.fullName || ""));
-    tr.appendChild(mk("Телефон", cleanExcelIntLike(p.phone || "")));
-    tr.appendChild(mk("Място", cleanExcelIntLike(p.seatNo || "")));
-
-    const tdInfo = document.createElement("td");
-    tdInfo.setAttribute("data-label", "Инфо");
-    tdInfo.innerHTML = renderInfoCellValue(p);
-    tr.appendChild(tdInfo);
-
-    const tdStatus = document.createElement("td");
-    tdStatus.setAttribute("data-label", "Статус");
-    tdStatus.innerHTML = renderBoardingStatus(p);
-    tr.appendChild(tdStatus);
-
-    const tdCash = document.createElement("td");
-    tdCash.setAttribute("data-label", "Каса");
-    tdCash.innerHTML = renderCashStatus(p);
-    tr.appendChild(tdCash);
-
-    tbody.appendChild(tr);
-  });
-}
-
-function renderCards(list){
-  const wrap = document.getElementById("cardView");
-  if (!wrap) return;
-  wrap.innerHTML = "";
-
-  if (!list.length){
-    wrap.innerHTML = "<div style='color:#777'>Няма пътници за показване.</div>";
-    return;
   }
 
-  for (const p of list){
-    const card = document.createElement("div");
-    card.className = "p-card";
+  function cityOrderIndex(cityValue, order) {
+    const key = canonicalCityKey(cityValue);
+    const index = order.indexOf(key);
 
-    card.innerHTML = `
-      <div class="p-title">${p.fullName || "—"}${p.seatNo ? ` • място ${cleanExcelIntLike(p.seatNo)}` : ""}</div>
-      <div class="p-sub">${p.fromCity || ""} → ${p.toCity || ""}</div>
-      <div class="p-sub">${cleanExcelIntLike(p.phone || "")}</div>
-      <div class="p-payment">${renderBoardingStatus(p)}</div>
-      <div class="p-payment" style="margin-top:8px;">${renderCashStatus(p)}</div>
-      <div class="p-payment" style="margin-top:8px;">${renderInfoCellValue(p)}</div>
-    `;
-    wrap.appendChild(card);
-  }
-}
-
-async function reloadPassengers(showStatus = true){
-  const saveStatus = document.getElementById("saveStatus");
-  const tripId = window.DRIVER_TRIP_ID;
-
-  if (showStatus && saveStatus) saveStatus.textContent = "Обновяване...";
-
-  passengers = await fetchPassengers(tripId);
-  for (const p of passengers){
-    p.currency = String(p.currency || inferCurrencyFromRaw(p.voucherRaw) || "EUR").toUpperCase();
+    return index === -1
+      ? 9999
+      : index;
   }
 
-  rerenderGlobal();
+  function compareCitiesByOrder(
+    firstCity,
+    secondCity,
+    order
+  ) {
+    const firstIndex = cityOrderIndex(
+      firstCity,
+      order
+    );
 
-  if (showStatus && saveStatus) saveStatus.textContent = "Обновено ✅";
-}
+    const secondIndex = cityOrderIndex(
+      secondCity,
+      order
+    );
 
-function rerenderGlobal(){
-  const tableView = document.getElementById("tableView");
-  const cardView = document.getElementById("cardView");
-
-  const filtered = getFilteredPassengers();
-
-  if (view === "table"){
-    tableView?.classList.remove("hidden");
-    cardView?.classList.add("hidden");
-    renderTable(filtered);
-  } else {
-    tableView?.classList.add("hidden");
-    cardView?.classList.remove("hidden");
-    renderCards(filtered);
-  }
-
-  renderSummary(filtered);
-}
-
-async function main(){
-  const tripId = window.DRIVER_TRIP_ID;
-  if (!tripId) return;
-
-  const search = document.getElementById("search");
-  const onlyUnchecked = document.getElementById("onlyUnchecked");
-  const onlyUnpaid = document.getElementById("onlyUnpaid");
-  const toggle = document.getElementById("toggleView");
-  const printBtn = document.getElementById("printBtn");
-  const reloadBtn = document.getElementById("reloadBtn");
-  const saveStatus = document.getElementById("saveStatus");
-  const tableView = document.getElementById("tableView");
-  const cardView = document.getElementById("cardView");
-
-  try{
-    await reloadPassengers(false);
-  } catch (e){
-    console.error(e);
-    if (saveStatus) saveStatus.textContent = `Грешка при зареждане: ${e.message}`;
-    if (tableView) tableView.classList.remove("hidden");
-    if (cardView) cardView.classList.add("hidden");
-    const tbody = document.getElementById("rowsDriver");
-    if (tbody){
-      tbody.innerHTML = `<tr><td colspan="9" style="color:#b91c1c;padding:14px 8px;">Грешка при зареждане: ${String(e.message || e)}</td></tr>`;
+    if (firstIndex !== secondIndex) {
+      return firstIndex - secondIndex;
     }
-    return;
+
+    return String(firstCity || "")
+      .localeCompare(
+        String(secondCity || ""),
+        "bg"
+      );
   }
 
-  reloadBtn?.addEventListener("click", async () => {
-    try{
-      await reloadPassengers(true);
-    } catch (e){
-      console.error(e);
-      if (saveStatus) saveStatus.textContent = `Грешка при обновяване: ${e.message}`;
+  function comparePassengersForRoute(
+    firstPassenger,
+    secondPassenger
+  ) {
+    const {
+      fromOrder,
+      toOrder
+    } = getRouteSideOrders();
+
+    const fromComparison = compareCitiesByOrder(
+      firstPassenger.fromCity,
+      secondPassenger.fromCity,
+      fromOrder
+    );
+
+    if (fromComparison !== 0) {
+      return fromComparison;
     }
-  });
 
-  search?.addEventListener("input", rerenderGlobal);
-  onlyUnchecked?.addEventListener("change", rerenderGlobal);
-  onlyUnpaid?.addEventListener("change", rerenderGlobal);
+    const toComparison = compareCitiesByOrder(
+      firstPassenger.toCity,
+      secondPassenger.toCity,
+      toOrder
+    );
 
-  toggle?.addEventListener("click", () => {
-    view = view === "table" ? "cards" : "table";
-    if (toggle) toggle.textContent = view === "table" ? "Card view" : "Table view";
-    tableView?.classList.toggle("hidden", view !== "table");
-    cardView?.classList.toggle("hidden", view !== "cards");
+    if (toComparison !== 0) {
+      return toComparison;
+    }
+
+    const firstSeat = cleanExcelIntLike(
+      firstPassenger.seatNo ||
+      ""
+    );
+
+    const secondSeat = cleanExcelIntLike(
+      secondPassenger.seatNo ||
+      ""
+    );
+
+    const firstSeatNumber = /^\d+$/.test(firstSeat)
+      ? Number(firstSeat)
+      : 999999;
+
+    const secondSeatNumber = /^\d+$/.test(secondSeat)
+      ? Number(secondSeat)
+      : 999999;
+
+    if (firstSeatNumber !== secondSeatNumber) {
+      return firstSeatNumber - secondSeatNumber;
+    }
+
+    return String(firstPassenger.fullName || "")
+      .localeCompare(
+        String(secondPassenger.fullName || ""),
+        "bg"
+      );
+  }
+
+  async function fetchPassengers() {
+    const url = (
+      window.DRIVER_PASSENGERS_API ||
+      `/api/trips/${tripId}/driver-passengers`
+    );
+
+    const response = await fetch(
+      url,
+      {
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: {
+          "Cache-Control": "no-cache"
+        }
+      }
+    );
+
+    const data = await response
+      .json()
+      .catch(() => []);
+
+    if (!response.ok) {
+      throw new Error(
+        (data && data.detail) ||
+        `Зареждането е неуспешно: HTTP ${response.status}`
+      );
+    }
+
+    /*
+      Поддържаме два варианта:
+        1) [ passenger, passenger, ... ]
+        2) { passengers: [ passenger, ... ] }
+    */
+    const rows = Array.isArray(data)
+      ? data
+      : (
+          Array.isArray(data?.passengers)
+            ? data.passengers
+            : []
+        );
+
+    return rows.map(normalizePassenger);
+  }
+
+  function matchesFilter(
+    passenger,
+    query,
+    onlyUnchecked,
+    onlyUnpaid
+  ) {
+    if (
+      onlyUnchecked &&
+      isCheckedIn(passenger)
+    ) {
+      return false;
+    }
+
+    if (
+      onlyUnpaid &&
+      isEffectivelyPaid(passenger)
+    ) {
+      return false;
+    }
+
+    if (!query) {
+      return true;
+    }
+
+    const normalizedQuery = query.toLowerCase();
+
+    return [
+      passenger.fullName,
+      passenger.phone,
+      passenger.seatNo,
+      passenger.voucherRaw,
+      passenger.fromCity,
+      passenger.toCity,
+      passenger.badReason
+    ].some((value) => {
+      return String(value || "")
+        .toLowerCase()
+        .includes(normalizedQuery);
+    });
+  }
+
+  function getFilteredPassengers() {
+    const searchInput = document.getElementById(
+      "search"
+    );
+
+    const onlyUncheckedInput = document.getElementById(
+      "onlyUnchecked"
+    );
+
+    const onlyUnpaidInput = document.getElementById(
+      "onlyUnpaid"
+    );
+
+    const query = String(
+      searchInput?.value ||
+      ""
+    ).trim();
+
+    return passengers
+      .filter((passenger) => {
+        return matchesFilter(
+          passenger,
+          query,
+          Boolean(onlyUncheckedInput?.checked),
+          Boolean(onlyUnpaidInput?.checked)
+        );
+      })
+      .slice()
+      .sort(comparePassengersForRoute);
+  }
+
+  function renderPassengerStats(filteredPassengers) {
+    const totalElement = document.getElementById(
+      "statTotalPassengers"
+    );
+
+    const checkedElement = document.getElementById(
+      "statCheckedPassengers"
+    );
+
+    const unpaidElement = document.getElementById(
+      "statUnpaidPassengers"
+    );
+
+    const visibleElement = document.getElementById(
+      "statVisiblePassengers"
+    );
+
+    const checkedCount = passengers.filter(
+      isCheckedIn
+    ).length;
+
+    const unpaidCount = passengers.filter(
+      (passenger) => !isEffectivelyPaid(passenger)
+    ).length;
+
+    if (totalElement) {
+      totalElement.textContent = String(
+        passengers.length
+      );
+    }
+
+    if (checkedElement) {
+      checkedElement.textContent = String(
+        checkedCount
+      );
+    }
+
+    if (unpaidElement) {
+      unpaidElement.textContent = String(
+        unpaidCount
+      );
+    }
+
+    if (visibleElement) {
+      visibleElement.textContent = String(
+        filteredPassengers.length
+      );
+    }
+  }
+
+  function renderTable(list) {
+    const tbody = document.getElementById(
+      "rowsDriver"
+    );
+
+    if (!tbody) {
+      return;
+    }
+
+    tbody.innerHTML = "";
+
+    if (!list.length) {
+      tbody.innerHTML = `
+        <tr>
+          <td
+            colspan="9"
+            style="padding:16px 8px;color:#64748b;">
+            Няма пътници за показване.
+          </td>
+        </tr>
+      `;
+
+      return;
+    }
+
+    list.forEach((passenger, index) => {
+      const row = document.createElement("tr");
+
+      row.innerHTML = `
+        <td>
+          ${index + 1}
+        </td>
+
+        <td>
+          ${escapeHtml(passenger.fromCity || "")}
+        </td>
+
+        <td>
+          ${escapeHtml(passenger.toCity || "")}
+        </td>
+
+        <td>
+          <strong>
+            ${escapeHtml(passenger.fullName || "—")}
+          </strong>
+        </td>
+
+        <td>
+          ${escapeHtml(cleanExcelIntLike(passenger.phone || ""))}
+        </td>
+
+        <td>
+          <strong>
+            ${escapeHtml(cleanExcelIntLike(passenger.seatNo || "—"))}
+          </strong>
+        </td>
+
+        <td>
+          ${renderInfoCellValue(passenger)}
+        </td>
+
+        <td>
+          ${renderBoardingStatus(passenger)}
+        </td>
+
+        <td>
+          ${renderCashStatus(passenger)}
+        </td>
+      `;
+
+      tbody.appendChild(row);
+    });
+  }
+
+  function renderCards(list) {
+    const wrap = document.getElementById(
+      "cardView"
+    );
+
+    if (!wrap) {
+      return;
+    }
+
+    if (!list.length) {
+      wrap.innerHTML = `
+        <div class="passenger-card text-sm text-slate-500">
+          Няма пътници за показване.
+        </div>
+      `;
+
+      return;
+    }
+
+    wrap.innerHTML = list
+      .map((passenger) => {
+        return `
+          <div class="passenger-card">
+            <div class="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div class="passenger-card-title">
+                  ${escapeHtml(passenger.fullName || "—")}
+                </div>
+
+                <div class="passenger-card-sub">
+                  ${escapeHtml(passenger.fromCity || "—")}
+                  →
+                  ${escapeHtml(passenger.toCity || "—")}
+                </div>
+              </div>
+
+              <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                <div class="text-[10px] font-black uppercase tracking-wide text-slate-500">
+                  Място
+                </div>
+
+                <div class="mt-1 text-lg font-black text-slate-900">
+                  ${escapeHtml(cleanExcelIntLike(passenger.seatNo || "—"))}
+                </div>
+              </div>
+            </div>
+
+            <div class="card-meta-grid">
+              <div class="card-meta-item">
+                <div class="card-meta-label">
+                  Телефон
+                </div>
+
+                <div class="card-meta-value">
+                  ${escapeHtml(cleanExcelIntLike(passenger.phone || "—"))}
+                </div>
+              </div>
+
+              <div class="card-meta-item">
+                <div class="card-meta-label">
+                  Качване
+                </div>
+
+                <div class="card-meta-value">
+                  ${renderBoardingStatus(passenger)}
+                </div>
+              </div>
+
+              <div class="card-meta-item">
+                <div class="card-meta-label">
+                  Плащане
+                </div>
+
+                <div class="card-meta-value">
+                  ${renderCashStatus(passenger)}
+                </div>
+              </div>
+
+              <div class="card-meta-item">
+                <div class="card-meta-label">
+                  Информация
+                </div>
+
+                <div class="card-meta-value">
+                  ${renderInfoCellValue(passenger)}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  function renderSummary(list) {
+    const fromElement = document.getElementById(
+      "sumFrom"
+    );
+
+    const toElement = document.getElementById(
+      "sumTo"
+    );
+
+    const expectedEurElement = document.getElementById(
+      "expEUR"
+    );
+
+    const expectedUahElement = document.getElementById(
+      "expUAH"
+    );
+
+    const actualEurElement = document.getElementById(
+      "actEUR"
+    );
+
+    const actualUahElement = document.getElementById(
+      "actUAH"
+    );
+
+    if (
+      !fromElement ||
+      !toElement ||
+      !expectedEurElement ||
+      !expectedUahElement ||
+      !actualEurElement ||
+      !actualUahElement
+    ) {
+      return;
+    }
+
+    const fromCounts = new Map();
+    const toCounts = new Map();
+
+    let expectedEur = 0;
+    let expectedUah = 0;
+    let actualEur = 0;
+    let actualUah = 0;
+
+    for (const passenger of list) {
+      const fromCity = String(
+        passenger.fromCity ||
+        ""
+      ).trim();
+
+      const toCity = String(
+        passenger.toCity ||
+        ""
+      ).trim();
+
+      if (fromCity) {
+        fromCounts.set(
+          fromCity,
+          (fromCounts.get(fromCity) || 0) + 1
+        );
+      }
+
+      if (toCity) {
+        toCounts.set(
+          toCity,
+          (toCounts.get(toCity) || 0) + 1
+        );
+      }
+
+      if (!passenger.paymentApproved) {
+        const due = parseMoney(
+          passenger.amountDue
+        );
+
+        const dueCurrency = String(
+          passenger.currency ||
+          inferCurrencyFromRaw(passenger.voucherRaw) ||
+          "EUR"
+        ).toUpperCase();
+
+        if (due !== null) {
+          if (dueCurrency === "UAH") {
+            expectedUah += due;
+          } else {
+            expectedEur += due;
+          }
+        } else {
+          const parsedExpected = parseExpectedFromInfo(
+            passenger.voucherRaw
+          );
+
+          if (
+            parsedExpected.due !== null &&
+            parsedExpected.cur
+          ) {
+            if (parsedExpected.cur === "UAH") {
+              expectedUah += parsedExpected.due;
+            } else {
+              expectedEur += parsedExpected.due;
+            }
+          }
+        }
+      }
+
+      const actualCurrency = String(
+        passenger.cashCollectedCurrency ||
+        passenger.currency ||
+        inferCurrencyFromRaw(passenger.voucherRaw) ||
+        "EUR"
+      ).toUpperCase();
+
+      const actualAmount = parseMoney(
+        passenger.cashCollectedAmount ??
+        passenger.amount
+      );
+
+      if (actualAmount !== null) {
+        if (actualCurrency === "UAH") {
+          actualUah += actualAmount;
+        } else {
+          actualEur += actualAmount;
+        }
+      }
+    }
+
+    const {
+      fromOrder,
+      toOrder
+    } = getRouteSideOrders();
+
+    function sortedEntries(
+      valueMap,
+      cityOrder
+    ) {
+      return [...valueMap.entries()]
+        .sort((firstEntry, secondEntry) => {
+          const comparison = compareCitiesByOrder(
+            firstEntry[0],
+            secondEntry[0],
+            cityOrder
+          );
+
+          if (comparison !== 0) {
+            return comparison;
+          }
+
+          return secondEntry[1] - firstEntry[1];
+        });
+    }
+
+    fromElement.innerHTML = (
+      sortedEntries(fromCounts, fromOrder)
+        .map(([city, count]) => {
+          return `
+            <tr>
+              <td>
+                ${escapeHtml(city)}
+              </td>
+
+              <td class="text-right font-black">
+                ${count}
+              </td>
+            </tr>
+          `;
+        })
+        .join("") ||
+      `
+        <tr>
+          <td colspan="2" class="text-slate-400">
+            Няма данни
+          </td>
+        </tr>
+      `
+    );
+
+    toElement.innerHTML = (
+      sortedEntries(toCounts, toOrder)
+        .map(([city, count]) => {
+          return `
+            <tr>
+              <td>
+                ${escapeHtml(city)}
+              </td>
+
+              <td class="text-right font-black">
+                ${count}
+              </td>
+            </tr>
+          `;
+        })
+        .join("") ||
+      `
+        <tr>
+          <td colspan="2" class="text-slate-400">
+            Няма данни
+          </td>
+        </tr>
+      `
+    );
+
+    expectedEurElement.textContent = expectedEur.toFixed(2);
+    expectedUahElement.textContent = expectedUah.toFixed(2);
+    actualEurElement.textContent = actualEur.toFixed(2);
+    actualUahElement.textContent = actualUah.toFixed(2);
+  }
+
+  function updateViewButtonText() {
+    const toggleButton = document.getElementById(
+      "toggleView"
+    );
+
+    if (!toggleButton) {
+      return;
+    }
+
+    toggleButton.textContent = view === "table"
+      ? "Card view"
+      : "Table view";
+  }
+
+  function rerenderGlobal() {
+    const tableView = document.getElementById(
+      "tableView"
+    );
+
+    const cardView = document.getElementById(
+      "cardView"
+    );
+
+    const filteredPassengers = getFilteredPassengers();
+
+    if (view === "table") {
+      tableView?.classList.remove("hidden");
+      cardView?.classList.add("hidden");
+
+      renderTable(filteredPassengers);
+    } else {
+      tableView?.classList.add("hidden");
+      cardView?.classList.remove("hidden");
+
+      renderCards(filteredPassengers);
+    }
+
+    updateViewButtonText();
+    renderPassengerStats(filteredPassengers);
+    renderSummary(filteredPassengers);
+  }
+
+  async function reloadPassengers(
+    showStatus = true
+  ) {
+    const statusElement = document.getElementById(
+      "saveStatus"
+    );
+
+    if (
+      showStatus &&
+      statusElement
+    ) {
+      statusElement.textContent = "Обновяване...";
+    }
+
+    passengers = await fetchPassengers();
+
+    for (const passenger of passengers) {
+      passenger.currency = String(
+        passenger.currency ||
+        inferCurrencyFromRaw(passenger.voucherRaw) ||
+        "EUR"
+      ).toUpperCase();
+    }
+
     rerenderGlobal();
-  });
 
-  printBtn?.addEventListener("click", () => {
-    view = "table";
-    if (toggle) toggle.textContent = "Card view";
-    tableView?.classList.remove("hidden");
-    cardView?.classList.add("hidden");
+    if (
+      showStatus &&
+      statusElement
+    ) {
+      statusElement.textContent = "Обновено ✓";
+
+      setTimeout(() => {
+        if (
+          statusElement.textContent === "Обновено ✓"
+        ) {
+          statusElement.textContent = "";
+        }
+      }, 2500);
+    }
+  }
+
+  async function initializePage() {
+    const searchInput = document.getElementById(
+      "search"
+    );
+
+    const onlyUncheckedInput = document.getElementById(
+      "onlyUnchecked"
+    );
+
+    const onlyUnpaidInput = document.getElementById(
+      "onlyUnpaid"
+    );
+
+    const reloadButton = document.getElementById(
+      "reloadBtn"
+    );
+
+    const toggleButton = document.getElementById(
+      "toggleView"
+    );
+
+    const printButton = document.getElementById(
+      "printBtn"
+    );
+
+    const statusElement = document.getElementById(
+      "saveStatus"
+    );
+
+    if (!tripId) {
+      if (statusElement) {
+        statusElement.textContent = "Липсва Trip ID.";
+      }
+
+      return;
+    }
+
+    try {
+      await reloadPassengers(false);
+    } catch (error) {
+      console.error(error);
+
+      if (statusElement) {
+        statusElement.textContent = (
+          "Грешка при зареждане: " +
+          String(error.message || error)
+        );
+      }
+
+      const tbody = document.getElementById(
+        "rowsDriver"
+      );
+
+      if (tbody) {
+        tbody.innerHTML = `
+          <tr>
+            <td
+              colspan="9"
+              style="padding:16px 8px;color:#b91c1c;">
+              Грешка при зареждане:
+              ${escapeHtml(error.message || error)}
+            </td>
+          </tr>
+        `;
+      }
+    }
+
+    reloadButton?.addEventListener(
+      "click",
+      async () => {
+        try {
+          await reloadPassengers(true);
+        } catch (error) {
+          console.error(error);
+
+          if (statusElement) {
+            statusElement.textContent = (
+              "Грешка при обновяване: " +
+              String(error.message || error)
+            );
+          }
+        }
+      }
+    );
+
+    searchInput?.addEventListener(
+      "input",
+      rerenderGlobal
+    );
+
+    onlyUncheckedInput?.addEventListener(
+      "change",
+      rerenderGlobal
+    );
+
+    onlyUnpaidInput?.addEventListener(
+      "change",
+      rerenderGlobal
+    );
+
+    toggleButton?.addEventListener(
+      "click",
+      () => {
+        view = view === "table"
+          ? "cards"
+          : "table";
+
+        rerenderGlobal();
+      }
+    );
+
+    printButton?.addEventListener(
+      "click",
+      () => {
+        view = "table";
+
+        rerenderGlobal();
+
+        setTimeout(
+          () => window.print(),
+          80
+        );
+      }
+    );
+
+    /*
+      Live reload през 20 секунди.
+      Не прекъсва работата на шофьора и не променя активния филтър.
+    */
+    setInterval(
+      () => {
+        reloadPassengers(false)
+          .catch((error) => {
+            console.error(
+              "Automatic reload failed",
+              error
+            );
+          });
+      },
+      20000
+    );
+
+    document.addEventListener(
+      "visibilitychange",
+      () => {
+        if (!document.hidden) {
+          reloadPassengers(false)
+            .catch((error) => {
+              console.error(
+                "Visibility reload failed",
+                error
+              );
+            });
+        }
+      }
+    );
+
     rerenderGlobal();
-    setTimeout(() => window.print(), 50);
-  });
+  }
 
-  rerenderGlobal();
-}
-
-main();
+  initializePage();
+})();
 </script>
 
 {% endblock %}

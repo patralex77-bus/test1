@@ -5111,34 +5111,300 @@ def portal_ticket_pdf(request: Request, db: Session = Depends(get_db)):
     return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
 
+# =======================
+# Driver QR scan verdict
+# =======================
 
+def _scan_optional_int(value) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _driver_scan_effective_seat(
+    booking: Booking | None,
+    passenger: TripPassenger | None,
+    payload: dict | None,
+) -> str | None:
+    """
+    Връща актуалното място на пътника.
+
+    Приоритет:
+      1) TripPassenger.manual_seat_no / seat_no
+      2) QR payload seat_no
+      3) BookingSeat final seat
+    """
+    if passenger:
+        passenger_seat = _effective_passenger_seat(passenger)
+        if passenger_seat:
+            return str(passenger_seat).strip()
+
+    if payload:
+        payload_seat = str(payload.get("seat_no") or "").strip()
+        if payload_seat:
+            return payload_seat
+
+    if booking:
+        booking_seat = _booking_selected_seat(booking)
+        if booking_seat:
+            return str(booking_seat).strip()
+
+    return None
+
+
+def _build_driver_scan_verdict(
+    db: Session,
+    *,
+    booking: Booking | None,
+    passenger: TripPassenger | None,
+    payload: dict | None,
+    active_trip_id: int | None = None,
+    boarding_state: dict | None = None,
+) -> dict:
+    """
+    Оценява QR билета за tablet scanner екрана.
+
+    Зелен резултат:
+      - booking и passenger са намерени
+      - билетът е за отворения рейс
+      - booking не е cancelled
+      - има определено място
+      - плащането е приключено
+
+    Червен резултат:
+      - грешен рейс
+      - липсва място
+      - cash трябва да бъде събран
+      - bank/paypal не е потвърдено
+      - cancelled booking
+    """
+    payload = payload or {}
+    boarding_state = boarding_state or {}
+
+    checks: list[dict] = []
+
+    def add_check(
+        key: str,
+        label: str,
+        ok: bool,
+        message_ok: str,
+        message_attention: str,
+    ) -> None:
+        checks.append({
+            "key": key,
+            "label": label,
+            "ok": bool(ok),
+            "message": message_ok if ok else message_attention,
+        })
+
+    actual_trip_id = _scan_optional_int(
+        getattr(passenger, "trip_id", None)
+        or getattr(booking, "trip_id", None)
+        or payload.get("trip_id")
+    )
+
+    expected_trip_id = _scan_optional_int(active_trip_id)
+
+    same_trip = True
+    if expected_trip_id is not None:
+        same_trip = (
+            actual_trip_id is not None
+            and int(actual_trip_id) == int(expected_trip_id)
+        )
+
+    add_check(
+        "trip",
+        "Рейс",
+        same_trip,
+        "Билетът е за избрания рейс.",
+        "Билетът е за друг рейс. Не допускай качване.",
+    )
+
+    booking_status = str(
+        getattr(booking, "booking_status", None)
+        or payload.get("booking_status")
+        or ""
+    ).strip().lower()
+
+    booking_active = booking_status not in {
+        "cancelled",
+        "cancellation_requested",
+    }
+
+    add_check(
+        "booking_status",
+        "Резервация",
+        booking_active,
+        "Резервацията е активна.",
+        "Резервацията е анулирана или е заявена анулация.",
+    )
+
+    seat_no = _driver_scan_effective_seat(
+        booking=booking,
+        passenger=passenger,
+        payload=payload,
+    )
+
+    seat_ok = bool(seat_no)
+
+    add_check(
+        "seat",
+        "Място",
+        seat_ok,
+        f"Място: {seat_no}",
+        "Не е избрано място. Не допускай качване преди назначаване.",
+    )
+
+    payment_method = _norm_payment_method(
+        getattr(booking, "payment_method", None)
+        if booking
+        else None
+    )
+
+    payment_status = str(
+        getattr(booking, "payment_status", None)
+        or payload.get("payment_status")
+        or ""
+    ).strip().lower()
+
+    cash_recorded = bool(
+        getattr(passenger, "paid", False)
+        if passenger
+        else False
+    ) or boarding_state.get("cash_collected_amount") is not None
+
+    if payment_method == "cash":
+        payment_ok = cash_recorded
+
+        add_check(
+            "payment",
+            "Плащане",
+            payment_ok,
+            "Кеш плащането е записано.",
+            "Плащането е в кеш. Събери и запиши сумата преди чекиране.",
+        )
+    else:
+        payment_ok = payment_status in {
+            "paid",
+            "approved",
+            "payment_approved",
+        }
+
+        add_check(
+            "payment",
+            "Плащане",
+            payment_ok,
+            "Плащането е потвърдено.",
+            "Плащането не е потвърдено. Провери резервацията.",
+        )
+
+    passenger_found = passenger is not None
+
+    add_check(
+        "passenger",
+        "Пътник",
+        passenger_found,
+        "Пътникът е намерен в списъка.",
+        "QR кодът не е свързан с пътник от списъка.",
+    )
+
+    all_ok = all(bool(item["ok"]) for item in checks)
+
+    blocking_problem = (
+        not passenger_found
+        or not same_trip
+        or not booking_active
+        or not seat_ok
+        or not payment_ok
+    )
+
+    return {
+        "ok": all_ok,
+        "level": "ok" if all_ok else "attention",
+        "headline": (
+            "ВСИЧКО Е НАРЕД"
+            if all_ok
+            else "НЕОБХОДИМА Е ПРОВЕРКА"
+        ),
+        "message": (
+            "Пътникът може да бъде чекиран."
+            if all_ok
+            else "Има параметър, който трябва да бъде проверен преди качване."
+        ),
+        "checks": checks,
+        "seat_no": seat_no,
+        "payment_method": payment_method or "—",
+        "payment_status": payment_status or "—",
+        "actual_trip_id": actual_trip_id,
+        "expected_trip_id": expected_trip_id,
+        "same_trip": same_trip,
+        "booking_active": booking_active,
+        "requires_cash_collection": (
+            payment_method == "cash"
+            and not cash_recorded
+        ),
+        "can_check_in": not blocking_problem,
+    }
+
+ 
 
 @app.get("/drivers/scan", response_class=HTMLResponse)
 def drivers_scan_get(
     request: Request,
     trip_id: int | None = None,
     err: str | None = None,
+    scan_ok: str | None = None,
+    db: Session = Depends(get_db),
 ):
     _ensure_driver(request)
+
+    scan_trip = None
+
+    if trip_id is not None:
+        scan_trip = crud.get_trip(db, trip_id)
+
+        if not scan_trip:
+            raise HTTPException(404, "Trip not found")
+
+        _ensure_trip_visible_for_driver(scan_trip)
 
     result = None
 
     if err:
         err_map = {
-            "invalid_qr": "Invalid QR payload",
-            "notfound": "Booking or passenger not found",
-            "cash_amount_missing": "Missing cash amount",
-            "cash_amount_invalid": "Invalid cash amount",
-            "bad_action": "Invalid scan action",
+            "invalid_qr": "QR кодът не може да бъде прочетен.",
+            "notfound": "Резервацията или пътникът не е намерен.",
+            "cash_amount_missing": "Въведи получената сума.",
+            "cash_amount_invalid": "Въведената сума е невалидна.",
+            "cash_not_allowed": "Тази резервация не е с плащане в кеш.",
+            "not_ready": "Пътникът не може да бъде чекиран преди отстраняване на отбелязаните проблеми.",
+            "wrong_trip": "QR кодът е за друг рейс.",
+            "bad_action": "Невалидно действие.",
         }
+
         result = {
             "ok": False,
-            "message": err_map.get(err, "Scan action failed"),
+            "message": err_map.get(err, "Действието не може да бъде изпълнено."),
             "booking": None,
             "passenger": None,
             "parsed_payload": None,
             "boarding_state": None,
+            "verdict": None,
         }
+
+    scan_ok_message = None
+
+    if scan_ok == "checkin":
+        scan_ok_message = "Пътникът е чекиран успешно."
+    elif scan_ok == "cash":
+        scan_ok_message = "Получената сума е записана успешно."
+    elif scan_ok == "oebb":
+        scan_ok_message = "Проверката на ÖBB е записана."
+    elif scan_ok == "refuse":
+        scan_ok_message = "Отказът за качване е записан."
 
     return templates.TemplateResponse(
         request,
@@ -5147,6 +5413,8 @@ def drivers_scan_get(
             "result": result,
             "payload_text": "",
             "trip_id": trip_id,
+            "scan_trip": scan_trip,
+            "scan_ok_message": scan_ok_message,
         },
     )
 
@@ -5163,6 +5431,16 @@ def drivers_scan_submit(
     payload_text = (qr_payload or "").strip()
     payload = _parse_ticket_payload(payload_text)
 
+    scan_trip = None
+
+    if trip_id is not None:
+        scan_trip = crud.get_trip(db, trip_id)
+
+        if not scan_trip:
+            raise HTTPException(404, "Trip not found")
+
+        _ensure_trip_visible_for_driver(scan_trip)
+
     result = {
         "ok": False,
         "message": "",
@@ -5170,40 +5448,61 @@ def drivers_scan_submit(
         "passenger": None,
         "parsed_payload": None,
         "boarding_state": None,
+        "verdict": None,
     }
 
     if not payload:
-        result["message"] = "Invalid QR payload"
+        result["message"] = "QR кодът е невалиден или не може да бъде прочетен."
+
         return templates.TemplateResponse(
             request,
             "drivers_scan.html",
             {
                 "result": result,
                 "payload_text": payload_text,
-                "trip_id": trip_id or request.query_params.get("trip_id"),
+                "trip_id": trip_id,
+                "scan_trip": scan_trip,
+                "scan_ok_message": None,
             },
         )
 
-    booking, passenger = _resolve_trip_passenger_by_ticket_payload(db, payload)
+    booking, passenger = _resolve_trip_passenger_by_ticket_payload(
+        db,
+        payload,
+    )
 
     if not booking:
-        result["message"] = "Booking not found"
+        result["message"] = "Резервацията не е намерена."
         result["parsed_payload"] = payload
 
     elif not passenger:
-        result["message"] = "Passenger not found for this QR"
+        result["message"] = "Пътникът не е намерен в списъка."
         result["booking"] = booking
         result["parsed_payload"] = payload
 
     else:
-        boarding_state = _get_driver_boarding_state_row(db, passenger.id)
+        boarding_state = _get_driver_boarding_state_row(
+            db,
+            passenger.id,
+        )
+
+        verdict = _build_driver_scan_verdict(
+            db,
+            booking=booking,
+            passenger=passenger,
+            payload=payload,
+            active_trip_id=trip_id,
+            boarding_state=boarding_state,
+        )
+
         result = {
-            "ok": True,
-            "message": "QR parsed successfully",
+            "ok": bool(verdict["ok"]),
+            "message": verdict["message"],
             "booking": booking,
             "passenger": passenger,
             "parsed_payload": payload,
             "boarding_state": boarding_state,
+            "verdict": verdict,
         }
 
     return templates.TemplateResponse(
@@ -5212,7 +5511,9 @@ def drivers_scan_submit(
         {
             "result": result,
             "payload_text": payload_text,
-            "trip_id": trip_id or request.query_params.get("trip_id"),
+            "trip_id": trip_id,
+            "scan_trip": scan_trip,
+            "scan_ok_message": None,
         },
     )
 
@@ -5222,6 +5523,7 @@ def drivers_scan_action(
     request: Request,
     qr_payload: str = Form(""),
     action: str = Form(""),
+    trip_id: int | None = Form(None),
     cash_amount: str = Form(""),
     cash_currency: str = Form("EUR"),
     refuse_reason: str = Form(""),
@@ -5231,21 +5533,73 @@ def drivers_scan_action(
     _ensure_driver(request)
 
     payload = _parse_ticket_payload((qr_payload or "").strip())
+
     if not payload:
-        return RedirectResponse(url="/drivers/scan?err=invalid_qr", status_code=303)
+        return RedirectResponse(
+            url=f"/drivers/scan?trip_id={trip_id or ''}&err=invalid_qr",
+            status_code=303,
+        )
 
-    booking, passenger = _resolve_trip_passenger_by_ticket_payload(db, payload)
+    booking, passenger = _resolve_trip_passenger_by_ticket_payload(
+        db,
+        payload,
+    )
+
     if not booking or not passenger:
-        return RedirectResponse(url="/drivers/scan?err=notfound", status_code=303)
+        return RedirectResponse(
+            url=f"/drivers/scan?trip_id={trip_id or ''}&err=notfound",
+            status_code=303,
+        )
 
-    current_state = _get_driver_boarding_state_row(db, passenger.id) or {}
+    resolved_trip_id = (
+        getattr(passenger, "trip_id", None)
+        or getattr(booking, "trip_id", None)
+        or trip_id
+    )
+
+    if not resolved_trip_id:
+        return RedirectResponse(
+            url="/drivers/scan?err=notfound",
+            status_code=303,
+        )
+
+    current_state = _get_driver_boarding_state_row(
+        db,
+        passenger.id,
+    ) or {}
+
+    verdict = _build_driver_scan_verdict(
+        db,
+        booking=booking,
+        passenger=passenger,
+        payload=payload,
+        active_trip_id=trip_id,
+        boarding_state=current_state,
+    )
+
+    if not verdict.get("same_trip"):
+        return RedirectResponse(
+            url=f"/drivers/scan?trip_id={trip_id or resolved_trip_id}&err=wrong_trip",
+            status_code=303,
+        )
 
     boarding_status = current_state.get("boarding_status") or (
-        "checked_in" if bool(getattr(passenger, "checked_in", False)) else "pending"
+        "checked_in"
+        if bool(getattr(passenger, "checked_in", False))
+        else "pending"
     )
+
     refused_reason_value = current_state.get("refused_reason")
-    oebb_checked = bool(current_state.get("oebb_checked")) or bool(getattr(passenger, "oebb", False))
-    cash_collected_amount = current_state.get("cash_collected_amount")
+
+    oebb_checked = (
+        bool(current_state.get("oebb_checked"))
+        or bool(getattr(passenger, "oebb", False))
+    )
+
+    cash_collected_amount = current_state.get(
+        "cash_collected_amount"
+    )
+
     cash_collected_currency = (
         current_state.get("cash_collected_currency")
         or getattr(passenger, "currency", None)
@@ -5254,31 +5608,54 @@ def drivers_scan_action(
 
     action = (action or "").strip().lower()
 
-    # support both template variants and old variants
     if action in {"check_in", "checkin"}:
+        if not verdict.get("can_check_in"):
+            return RedirectResponse(
+                url=f"/drivers/scan?trip_id={trip_id or resolved_trip_id}&err=not_ready",
+                status_code=303,
+            )
+
         passenger.checked_in = True
         boarding_status = "checked_in"
         refused_reason_value = None
 
     elif action in {"collect_cash", "cash"}:
+        if _norm_payment_method(
+            getattr(booking, "payment_method", None)
+        ) != "cash":
+            return RedirectResponse(
+                url=f"/drivers/scan?trip_id={trip_id or resolved_trip_id}&err=cash_not_allowed",
+                status_code=303,
+            )
+
         raw_amount = (cash_amount or "").strip()
+
         if not raw_amount:
             return RedirectResponse(
-                url=f"/drivers/scan?err=cash_amount_missing&trip_id={passenger.trip_id}",
+                url=f"/drivers/scan?trip_id={trip_id or resolved_trip_id}&err=cash_amount_missing",
                 status_code=303,
             )
 
         try:
-            parsed_amount = float(raw_amount.replace(",", "."))
+            parsed_amount = float(
+                raw_amount.replace(",", ".")
+            )
+
+            if parsed_amount < 0:
+                raise ValueError("Negative cash amount")
+
         except Exception:
             return RedirectResponse(
-                url=f"/drivers/scan?err=cash_amount_invalid&trip_id={passenger.trip_id}",
+                url=f"/drivers/scan?trip_id={trip_id or resolved_trip_id}&err=cash_amount_invalid",
                 status_code=303,
             )
 
         passenger.paid = True
         passenger.amount = parsed_amount
-        passenger.currency = ((cash_currency or "EUR").upper().strip() or "EUR")
+        passenger.currency = (
+            (cash_currency or "EUR").upper().strip()
+            or "EUR"
+        )
 
         cash_collected_amount = parsed_amount
         cash_collected_currency = passenger.currency
@@ -5290,6 +5667,7 @@ def drivers_scan_action(
     elif action == "refuse":
         passenger.checked_in = False
         boarding_status = "refused"
+
         refused_reason_value = (
             (refused_reason or "").strip()
             or (refuse_reason or "").strip()
@@ -5297,16 +5675,22 @@ def drivers_scan_action(
         )
 
     else:
-        return RedirectResponse(url="/drivers/scan?err=bad_action", status_code=303)
+        return RedirectResponse(
+            url=f"/drivers/scan?trip_id={trip_id or resolved_trip_id}&err=bad_action",
+            status_code=303,
+        )
 
     _upsert_driver_boarding_state(
         db=db,
         passenger_id=passenger.id,
-        trip_id=passenger.trip_id,
+        trip_id=int(resolved_trip_id),
         booking_id=getattr(passenger, "booking_id", None),
         boarding_status=boarding_status,
         refused_reason=refused_reason_value,
-        last_qr_payload=json.dumps(payload, ensure_ascii=False),
+        last_qr_payload=json.dumps(
+            payload,
+            ensure_ascii=False,
+        ),
         oebb_checked=oebb_checked,
         cash_collected_amount=cash_collected_amount,
         cash_collected_currency=cash_collected_currency,
@@ -5316,10 +5700,9 @@ def drivers_scan_action(
     db.commit()
 
     return RedirectResponse(
-        url=f"/drivers/trips/{passenger.trip_id}?scan_ok={action}",
+        url=f"/drivers/scan?trip_id={trip_id or resolved_trip_id}&scan_ok={action}",
         status_code=303,
     )
-
 
 @app.post("/admin/bookings/{booking_id}/assign-seat")
 def admin_booking_assign_seat(
@@ -7997,13 +8380,8 @@ def driver_trip_detail(
     _ensure_driver(request)
 
     trip = crud.get_trip(db, trip_id)
-
     if not trip:
         raise HTTPException(404, "Trip not found")
-
-    # Няма Freigabe проверка.
-    # Driver вижда live данните, но само за вчера / днес / утре.
-    _ensure_trip_visible_for_driver(trip)
 
     live_payload = _build_driver_trip_live_payload(db, trip_id)
 
@@ -8016,29 +8394,17 @@ def driver_trip_detail(
             "driver_booking_pending": live_payload.get("bookingPending", []),
             "driver_booking_coverage": live_payload.get("bookingCoverage", []),
             "driver_raw_passenger_count": int(
-                live_payload.get("rawPassengerCount")
-                or 0
+                live_payload.get("rawPassengerCount") or 0
             ),
             "driver_kept_passenger_count": int(
-                live_payload.get("keptPassengerCount")
-                or 0
+                live_payload.get("keptPassengerCount") or 0
             ),
             "driver_missing_passenger_count": int(
-                live_payload.get("missingPassengerCount")
-                or 0
+                live_payload.get("missingPassengerCount") or 0
             ),
             "driver_display_total": int(
-                live_payload.get("displayTotal")
-                or 0
+                live_payload.get("displayTotal") or 0
             ),
-
-            # Данните вече са винаги live.
-            "driver_live_mode": True,
-
-            # Оставени са за backward compatibility,
-            # ако старият template още ги използва.
-            "driver_manifest_published": False,
-            "driver_manifest_published_at": None,
         },
     )
 
@@ -8271,7 +8637,11 @@ def api_driver_manifest_debug(trip_id: int, request: Request, db: Session = Depe
     }
 
 @app.get("/api/trips/{trip_id}/driver-passengers")
-def api_driver_list_passengers(trip_id: int, request: Request, db: Session = Depends(get_db)):
+def api_driver_list_passengers(
+    trip_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     is_admin = bool(request.session.get("is_admin"))
     is_driver = bool(request.session.get("is_driver"))
 
@@ -8282,11 +8652,11 @@ def api_driver_list_passengers(trip_id: int, request: Request, db: Session = Dep
     if not trip:
         raise HTTPException(404, "Trip not found")
 
-    if is_driver and not is_admin:
-        _ensure_trip_visible_for_driver(trip)
-
     payload = _build_driver_trip_live_payload(db, trip_id)
-    return JSONResponse(payload.get("passengers", []))
+
+    return JSONResponse(
+        payload.get("passengers", [])
+    )
 
 
 # =======================

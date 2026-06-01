@@ -1,20 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="mx-auto max-w-6xl">
+<div class="mx-auto max-w-6xl pb-10">
   <div class="mb-5 flex items-start gap-3">
     <div>
       <h1 class="text-xl font-black tracking-tight text-slate-900">
         Рейсове за шофьора
       </h1>
 
-      <p class="mt-1 text-sm text-slate-500">
-        Показват се само активните рейсове за вчера, днес и утре.
-        Информацията се обновява директно от системата и не изисква Freigabe.
+      <p class="mt-1 text-sm leading-6 text-slate-500">
+        Показват се активните рейсове за вчера, днес и утре.
+        Информацията се зарежда директно от системата и не изисква допълнително потвърждение от администратора.
       </p>
     </div>
 
-    <form method="post" action="/drivers/logout" class="ml-auto">
+    <form method="post" action="/drivers/logout" class="ml-auto shrink-0">
       <button
         type="submit"
         class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">
@@ -168,12 +168,9 @@
 
 <script>
 (function () {
-  const ACTIVE_DAYS = {{ (active_days | default([], true)) | tojson }};
-  const TRIPS = {{ (trips_data | default([], true)) | tojson }};
-  const TODAY = {{ (today | default("")) | tojson }};
-
-  let selectedDate = TODAY;
-  let selectedTripId = null;
+  const ACTIVE_DAYS_RAW = {{ (active_days | default([], true)) | tojson }};
+  const TRIPS_RAW = {{ (trips_data | default([], true)) | tojson }};
+  const TODAY_FROM_BACKEND = {{ (today | default("")) | tojson }};
 
   function esc(value) {
     return String(value ?? "")
@@ -184,8 +181,332 @@
       .replaceAll("'", "&#039;");
   }
 
+  function normalizeText(value) {
+    return String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replaceAll("і", "i")
+      .replaceAll("ї", "i")
+      .replaceAll("ё", "е")
+      .replace(/\s+/g, " ");
+  }
+
+  function numberOrZero(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function ymd(dateObject) {
+    const year = dateObject.getFullYear();
+    const month = String(dateObject.getMonth() + 1).padStart(2, "0");
+    const day = String(dateObject.getDate()).padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
+  }
+
+  function parseLocalDate(dateString) {
+    const parts = String(dateString || "")
+      .split("-")
+      .map((item) => Number(item));
+
+    if (parts.length !== 3 || parts.some((item) => !Number.isFinite(item))) {
+      return new Date();
+    }
+
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+
+  function addDays(dateString, amount) {
+    const dateObject = parseLocalDate(dateString);
+    dateObject.setDate(dateObject.getDate() + Number(amount || 0));
+
+    return ymd(dateObject);
+  }
+
+  function formatDateBg(dateString) {
+    if (!dateString) return "—";
+
+    const dateObject = parseLocalDate(dateString);
+
+    return dateObject.toLocaleDateString("bg-BG", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric"
+    });
+  }
+
+  function relativeDayLabel(dateString, todayString) {
+    if (dateString === addDays(todayString, -1)) return "Вчера";
+    if (dateString === todayString) return "Днес";
+    if (dateString === addDays(todayString, 1)) return "Утре";
+
+    return "Дата";
+  }
+
+  const TODAY = String(TODAY_FROM_BACKEND || ymd(new Date()));
+
+  /*
+    Ако backend-ът още не подава active_days,
+    страницата сама изгражда вчера / днес / утре.
+  */
+  const ACTIVE_DAYS = (
+    Array.isArray(ACTIVE_DAYS_RAW) && ACTIVE_DAYS_RAW.length
+      ? ACTIVE_DAYS_RAW
+      : [-1, 0, 1].map((offset) => {
+          const date = addDays(TODAY, offset);
+
+          return {
+            date: date,
+            relative_label: relativeDayLabel(date, TODAY),
+            date_label: formatDateBg(date)
+          };
+        })
+  ).map((item) => {
+    const date = String(item.date || "").trim();
+
+    return {
+      date: date,
+      relative_label:
+        String(
+          item.relative_label ||
+          item.relativeLabel ||
+          relativeDayLabel(date, TODAY)
+        ),
+      date_label:
+        String(
+          item.date_label ||
+          item.dateLabel ||
+          formatDateBg(date)
+        )
+    };
+  });
+
+  function firstAvailableValue(object, keys, fallback = "") {
+    for (const key of keys) {
+      const value = object?.[key];
+
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        return value;
+      }
+    }
+
+    return fallback;
+  }
+
+  function isUkraineStop(value) {
+    const text = normalizeText(value);
+
+    return [
+      "kyiv",
+      "kiev",
+      "київ",
+      "киев",
+      "zhytomyr",
+      "житомир",
+      "rivne",
+      "рівне",
+      "ровно",
+      "lviv",
+      "львів",
+      "львов",
+      "ukraine",
+      "україна",
+      "украина"
+    ].some((token) => text.includes(normalizeText(token)));
+  }
+
+  function isAustriaStop(value) {
+    const text = normalizeText(value);
+
+    return [
+      "wien",
+      "vienna",
+      "відень",
+      "видень",
+      "innsbruck",
+      "інсбрук",
+      "инсбрук",
+      "linz",
+      "лінц",
+      "wels",
+      "вельс",
+      "salzburg",
+      "зальцбург",
+      "graz",
+      "грац",
+      "klagenfurt",
+      "клагенфурт",
+      "villach",
+      "філлах",
+      "филлах",
+      "austria",
+      "австрія",
+      "австрия"
+    ].some((token) => text.includes(normalizeText(token)));
+  }
+
+  function normalizeDirection(rawTrip) {
+    const rawDirection = normalizeText(
+      firstAvailableValue(
+        rawTrip,
+        ["dir", "direction", "direction_code", "directionCode"],
+        ""
+      )
+    )
+      .replaceAll(" ", "")
+      .replaceAll("-", "_")
+      .replaceAll(">", "")
+      .replaceAll("→", "_");
+
+    /*
+      Поддържаме и новите, и старите кодове:
+
+      KI    = Kyiv → Innsbruck = UA → AT
+      IK    = Innsbruck → Kyiv = AT → UA
+    */
+    if (
+      rawDirection === "ua_at" ||
+      rawDirection === "uaat" ||
+      rawDirection === "ki"
+    ) {
+      return "UA_AT";
+    }
+
+    if (
+      rawDirection === "at_ua" ||
+      rawDirection === "atua" ||
+      rawDirection === "ik"
+    ) {
+      return "AT_UA";
+    }
+
+    const fromValue = firstAvailableValue(
+      rawTrip,
+      ["from", "routeFrom", "route_from", "busFrom", "bus_from"],
+      ""
+    );
+
+    const toValue = firstAvailableValue(
+      rawTrip,
+      ["to", "routeTo", "route_to", "busTo", "bus_to"],
+      ""
+    );
+
+    if (isUkraineStop(fromValue) && isAustriaStop(toValue)) {
+      return "UA_AT";
+    }
+
+    if (isAustriaStop(fromValue) && isUkraineStop(toValue)) {
+      return "AT_UA";
+    }
+
+    return "OTHER";
+  }
+
+  function normalizeTrip(rawTrip) {
+    const fromValue = String(
+      firstAvailableValue(
+        rawTrip,
+        ["from", "routeFrom", "route_from", "busFrom", "bus_from"],
+        "—"
+      )
+    );
+
+    const toValue = String(
+      firstAvailableValue(
+        rawTrip,
+        ["to", "routeTo", "route_to", "busTo", "bus_to"],
+        "—"
+      )
+    );
+
+    const dateValue = String(
+      firstAvailableValue(
+        rawTrip,
+        ["date", "tripDate", "trip_date"],
+        ""
+      )
+    );
+
+    const labelValue = String(
+      firstAvailableValue(
+        rawTrip,
+        ["routeLabel", "route_label", "label"],
+        `${fromValue} → ${toValue}`
+      )
+    );
+
+    return {
+      id: numberOrZero(
+        firstAvailableValue(rawTrip, ["id", "tripId", "trip_id"], 0)
+      ),
+
+      date: dateValue,
+
+      dateLabel: String(
+        firstAvailableValue(
+          rawTrip,
+          ["dateLabel", "date_label"],
+          formatDateBg(dateValue)
+        )
+      ),
+
+      time: String(
+        firstAvailableValue(
+          rawTrip,
+          ["time", "tripTime", "trip_time"],
+          "—"
+        )
+      ),
+
+      from: fromValue,
+      to: toValue,
+      routeLabel: labelValue,
+      dir: normalizeDirection(rawTrip),
+
+      total: numberOrZero(
+        firstAvailableValue(
+          rawTrip,
+          ["total", "displayTotal", "display_total"],
+          0
+        )
+      ),
+
+      kept: numberOrZero(
+        firstAvailableValue(
+          rawTrip,
+          ["kept", "keptPassengerCount", "kept_passenger_count"],
+          0
+        )
+      ),
+
+      missing: numberOrZero(
+        firstAvailableValue(
+          rawTrip,
+          ["missing", "missingPassengerCount", "missing_passenger_count"],
+          0
+        )
+      )
+    };
+  }
+
+  const TRIPS = (
+    Array.isArray(TRIPS_RAW)
+      ? TRIPS_RAW
+      : []
+  )
+    .map(normalizeTrip)
+    .filter((trip) => trip.id > 0 && trip.date);
+
+  let selectedDate = TODAY;
+  let selectedTripId = null;
+
+  function tripsForDate(dateValue) {
+    return TRIPS.filter((trip) => trip.date === dateValue);
+  }
+
   function tripsForSelectedDate() {
-    return TRIPS.filter((trip) => trip.date === selectedDate);
+    return tripsForDate(selectedDate);
   }
 
   function findSelectedTrip() {
@@ -197,13 +518,47 @@
     }) || null;
   }
 
+  function chooseInitialDate() {
+    const todayExists = ACTIVE_DAYS.some((day) => day.date === TODAY);
+
+    if (todayExists) {
+      selectedDate = TODAY;
+      return;
+    }
+
+    const firstDateWithTrip = ACTIVE_DAYS.find((day) => {
+      return tripsForDate(day.date).length > 0;
+    });
+
+    selectedDate = firstDateWithTrip?.date || ACTIVE_DAYS[0]?.date || TODAY;
+  }
+
+  function ensureValidSelectedTrip() {
+    const selectedTrip = findSelectedTrip();
+
+    if (selectedTrip) return;
+
+    const availableTrips = tripsForSelectedDate();
+
+    /*
+      Ако за датата има само един рейс,
+      подробностите му се отварят автоматично.
+    */
+    if (availableTrips.length === 1) {
+      selectedTripId = Number(availableTrips[0].id);
+      return;
+    }
+
+    selectedTripId = null;
+  }
+
   function renderDateTabs() {
     const wrap = document.getElementById("dateTabs");
 
     if (!wrap) return;
 
     wrap.innerHTML = ACTIVE_DAYS.map((day) => {
-      const count = TRIPS.filter((trip) => trip.date === day.date).length;
+      const count = tripsForDate(day.date).length;
       const activeClass = day.date === selectedDate ? " active" : "";
 
       return `
@@ -230,15 +585,6 @@
         </button>
       `;
     }).join("");
-
-    wrap.querySelectorAll("[data-date]").forEach((button) => {
-      button.addEventListener("click", () => {
-        selectedDate = button.dataset.date || TODAY;
-        selectedTripId = null;
-
-        renderAll();
-      });
-    });
   }
 
   function tripChoiceHtml(trip) {
@@ -251,7 +597,11 @@
           Липсват: ${Number(trip.missing || 0)}
         </div>
       `
-      : "";
+      : `
+        <div class="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-700">
+          Данните са налични
+        </div>
+      `;
 
     return `
       <button
@@ -328,6 +678,26 @@
     `;
   }
 
+  function renderDirectionGrid() {
+    const wrap = document.getElementById("directionGrid");
+
+    if (!wrap) return;
+
+    wrap.innerHTML = [
+      renderDirectionBox(
+        "UA_AT",
+        "Украйна → Австрия",
+        "ua-at"
+      ),
+
+      renderDirectionBox(
+        "AT_UA",
+        "Австрия → Украйна",
+        "at-ua"
+      )
+    ].join("");
+  }
+
   function renderOtherTrips() {
     const wrap = document.getElementById("otherTripsWrap");
 
@@ -372,39 +742,6 @@
     `;
   }
 
-  function attachTripChoiceEvents() {
-    document.querySelectorAll("[data-trip-id]").forEach((button) => {
-      button.addEventListener("click", () => {
-        selectedTripId = Number(button.dataset.tripId);
-
-        renderDirectionGrid();
-        renderOtherTrips();
-        attachTripChoiceEvents();
-        renderTripDetails();
-      });
-    });
-  }
-
-  function renderDirectionGrid() {
-    const wrap = document.getElementById("directionGrid");
-
-    if (!wrap) return;
-
-    wrap.innerHTML = [
-      renderDirectionBox(
-        "UA_AT",
-        "Украйна → Австрия",
-        "ua-at"
-      ),
-
-      renderDirectionBox(
-        "AT_UA",
-        "Австрия → Украйна",
-        "at-ua"
-      ),
-    ].join("");
-  }
-
   function renderTripDetails() {
     const wrap = document.getElementById("tripDetailsWrap");
 
@@ -439,11 +776,19 @@
             </div>
           </div>
 
-          <a
-            href="/drivers/trips/${Number(trip.id)}"
-            class="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-black text-white hover:bg-slate-800">
-            Отвори списъка →
-          </a>
+          <div class="flex flex-wrap gap-2">
+            <a
+              href="/drivers/scan?trip_id=${Number(trip.id)}"
+              class="inline-flex min-h-[50px] items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700">
+              Сканирай QR
+            </a>
+
+            <a
+              href="/drivers/trips/${Number(trip.id)}"
+              class="inline-flex min-h-[50px] items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-black text-white hover:bg-slate-800">
+              Отвори списъка →
+            </a>
+          </div>
         </div>
 
         <div class="details-grid mt-5">
@@ -453,7 +798,7 @@
             </div>
 
             <div class="mt-1 text-base font-black text-slate-900">
-              ${esc(trip.dateLabel || "—")}
+              ${esc(trip.dateLabel || formatDateBg(trip.date))}
             </div>
           </div>
 
@@ -515,13 +860,16 @@
     const title = document.getElementById("selectedDateTitle");
     const badge = document.getElementById("tripCountBadge");
 
-    const day = ACTIVE_DAYS.find((item) => item.date === selectedDate);
+    const day = ACTIVE_DAYS.find((item) => {
+      return item.date === selectedDate;
+    });
+
     const count = tripsForSelectedDate().length;
 
     if (title) {
       title.textContent = day
         ? `${day.relative_label} • ${day.date_label}`
-        : selectedDate;
+        : formatDateBg(selectedDate);
     }
 
     if (badge) {
@@ -532,20 +880,53 @@
   }
 
   function renderAll() {
-    const validSelectedTrip = findSelectedTrip();
-
-    if (!validSelectedTrip) {
-      selectedTripId = null;
-    }
+    ensureValidSelectedTrip();
 
     renderDateTabs();
     renderDateTitle();
     renderDirectionGrid();
     renderOtherTrips();
-    attachTripChoiceEvents();
     renderTripDetails();
   }
 
+  document
+    .getElementById("dateTabs")
+    ?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-date]");
+
+      if (!button) return;
+
+      selectedDate = String(button.dataset.date || TODAY);
+      selectedTripId = null;
+
+      renderAll();
+    });
+
+  document
+    .getElementById("directionGrid")
+    ?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-trip-id]");
+
+      if (!button) return;
+
+      selectedTripId = Number(button.dataset.tripId);
+
+      renderAll();
+    });
+
+  document
+    .getElementById("otherTripsWrap")
+    ?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-trip-id]");
+
+      if (!button) return;
+
+      selectedTripId = Number(button.dataset.tripId);
+
+      renderAll();
+    });
+
+  chooseInitialDate();
   renderAll();
 })();
 </script>
