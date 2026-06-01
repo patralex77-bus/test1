@@ -5852,85 +5852,199 @@ def build_driver_trip_projection(db: Session, trip_id: int) -> dict:
     }
 
 
+def _build_driver_trip_live_payload(
+    db: Session,
+    trip_id: int,
+) -> dict:
+    """
+    Live payload за driver view.
 
-def _build_driver_trip_live_payload(db: Session, trip_id: int) -> dict:
-    projection = build_driver_trip_projection(db, trip_id)
+    Обединява:
+      - deduped TripPassenger rows
+      - portal/admin seat overlay
+      - payment approval overlay
+      - driver boarding state
+      - blacklist информация
+
+    ВАЖНО:
+    paymentApproved и paymentBadgeLabel винаги се създават,
+    дори когато за конкретния passenger няма portal overlay.
+    """
+
+    projection = build_driver_trip_projection(
+        db,
+        trip_id,
+    )
+
     trip = projection.get("trip")
 
     if not trip:
-        raise HTTPException(404, "Trip not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Trip not found",
+        )
 
     kept_passengers = sorted(
-        list(projection.get("passengers") or []),
+        list(
+            projection.get("passengers")
+            or []
+        ),
         key=_trip_passenger_sort_key,
     )
 
-    portal_overlay = _build_trip_portal_overlay(db, trip_id, kept_passengers)
-    boarding_state_map = _get_driver_boarding_state_map(db, trip_id)
+    portal_overlay = _build_trip_portal_overlay(
+        db,
+        trip_id,
+        kept_passengers,
+    )
+
+    boarding_state_map = _get_driver_boarding_state_map(
+        db,
+        trip_id,
+    )
 
     out: list[dict] = []
-    for p in kept_passengers:
-        item = _passenger_to_api_dict(p, trip)
 
-        ov = portal_overlay.get(int(p.id), {})
-        seat_override = (ov.get("seatNo") or "").strip()
+    for passenger in kept_passengers:
+        item = _passenger_to_api_dict(
+            passenger,
+            trip,
+        )
+
+        passenger_id = int(
+            getattr(
+                passenger,
+                "id",
+                0,
+            )
+            or 0
+        )
+
+        overlay = portal_overlay.get(
+            passenger_id,
+            {},
+        )
+
+        # ---------------------------------------------------
+        # Seat overlay
+        # ---------------------------------------------------
+        seat_override = str(
+            overlay.get("seatNo")
+            or ""
+        ).strip()
+
         if seat_override:
             item["seatNo"] = seat_override
 
+        # ---------------------------------------------------
+        # Payment overlay
+        #
+        # КРИТИЧНО:
+        # ключът paymentApproved се задава винаги.
+        # Не използваме item["paymentApproved"] преди това.
+        # ---------------------------------------------------
+        payment_approved = bool(
+            overlay.get(
+                "paymentApproved",
+                False,
+            )
+        )
+
+        item["paymentApproved"] = payment_approved
+
         item["paymentBadgeLabel"] = (
             "PAYMENT APPROVED"
-            if item["paymentApproved"]
+            if payment_approved
             else ""
         )
 
-        item["paymentMethod"] = (
-            str(ov.get("paymentMethod") or "")
-            .strip()
-            .lower()
+        # ---------------------------------------------------
+        # Boarding state
+        # ---------------------------------------------------
+        state = boarding_state_map.get(
+            passenger_id,
+            {},
         )
 
-        item["cashRequired"] = bool(
-            ov.get("cashRequired")
-        )
-
-        item["bookingTotal"] = ov.get(
-            "bookingTotal"
-        )
-
-        item["bookingCurrency"] = (
-            str(
-                ov.get("bookingCurrency")
-                or item.get("currency")
-                or "EUR"
+        item["boardingStatus"] = (
+            state.get("boarding_status")
+            or (
+                "checked_in"
+                if item.get("checkedIn")
+                else "pending"
             )
-            .strip()
-            .upper()
         )
 
-        state = boarding_state_map.get(int(p.id), {})
-        item["boardingStatus"] = state.get("boarding_status") or ("checked_in" if item.get("checkedIn") else "pending")
-        item["refusedReason"] = state.get("refused_reason")
-        item["oebbChecked"] = bool(state.get("oebb_checked")) or bool(item.get("oebb"))
-        item["cashCollectedAmount"] = state.get("cash_collected_amount")
-        item["cashCollectedCurrency"] = state.get("cash_collected_currency")
+        item["refusedReason"] = state.get(
+            "refused_reason"
+        )
+
+        item["oebbChecked"] = bool(
+            state.get("oebb_checked")
+        ) or bool(
+            item.get("oebb")
+        )
+
+        item["cashCollectedAmount"] = state.get(
+            "cash_collected_amount"
+        )
+
+        item["cashCollectedCurrency"] = state.get(
+            "cash_collected_currency"
+        )
 
         out.append(item)
 
-    decorate_passenger_dicts_with_bad_clients(db, out)
+    decorate_passenger_dicts_with_bad_clients(
+        db,
+        out,
+    )
 
     return {
         "tripId": trip.id,
+
         "routeFrom": trip.route_from,
         "routeTo": trip.route_to,
-        "tripDate": trip.date_time.isoformat() if trip.date_time else None,
+
+        "tripDate": (
+            trip.date_time.isoformat()
+            if trip.date_time
+            else None
+        ),
+
         "passengers": out,
-        "displayTotal": int(projection.get("display_total") or 0),
-        "rawPassengerCount": int(projection.get("raw_passenger_count") or 0),
-        "keptPassengerCount": int(projection.get("kept_passenger_count") or 0),
-        "missingPassengerCount": int(projection.get("missing_passenger_count") or 0),
-        "bookingPending": list(projection.get("booking_pending") or []),
-        "bookingCoverage": list(projection.get("booking_coverage") or []),
+
+        "displayTotal": int(
+            projection.get("display_total")
+            or 0
+        ),
+
+        "rawPassengerCount": int(
+            projection.get("raw_passenger_count")
+            or 0
+        ),
+
+        "keptPassengerCount": int(
+            projection.get("kept_passenger_count")
+            or 0
+        ),
+
+        "missingPassengerCount": int(
+            projection.get("missing_passenger_count")
+            or 0
+        ),
+
+        "bookingPending": list(
+            projection.get("booking_pending")
+            or []
+        ),
+
+        "bookingCoverage": list(
+            projection.get("booking_coverage")
+            or []
+        ),
     }
+
 
 
 def _ensure_driver_manifest_table(db: Session) -> None:

@@ -98,12 +98,7 @@
         само некачени
       </label>
 
-      <label class="filter-chip">
-        <input
-          type="checkbox"
-          id="onlyCashPending" />
-        само CASH за касиране
-      </label>
+      
     </div>
   </div>
 
@@ -143,21 +138,6 @@
       </div>
     </div>
 
-    <div class="summary-card">
-      <div class="summary-label">
-        CASH за касиране
-      </div>
-
-      <div
-        id="statCashPendingPassengers"
-        class="summary-value text-amber-700">
-        0
-      </div>
-
-      <div class="summary-hint">
-        Резервации в брой без записано плащане
-      </div>
-    </div>
 
     <div class="summary-card">
       <div class="summary-label">
@@ -548,7 +528,7 @@
 
   .summary-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
     margin-top: 12px;
   }
@@ -2224,80 +2204,56 @@
       );
   }
 
-  function renderPassengerStats(
-    filteredPassengers
+function renderPassengerStats(
+  filteredPassengers
+) {
+  const totalElement =
+    document.getElementById(
+      "statTotalPassengers"
+    );
+
+  const checkedElement =
+    document.getElementById(
+      "statCheckedPassengers"
+    );
+
+  const visibleElement =
+    document.getElementById(
+      "statVisiblePassengers"
+    );
+
+  const checkedCount =
+    passengers.filter(
+      isCheckedIn
+    ).length;
+
+  if (
+    totalElement
   ) {
-    const totalElement =
-      document.getElementById(
-        "statTotalPassengers"
+    totalElement.textContent =
+      String(
+        passengers.length
       );
-
-    const checkedElement =
-      document.getElementById(
-        "statCheckedPassengers"
-      );
-
-    const cashPendingElement =
-      document.getElementById(
-        "statCashPendingPassengers"
-      );
-
-    const visibleElement =
-      document.getElementById(
-        "statVisiblePassengers"
-      );
-
-    const checkedCount =
-      passengers.filter(
-        isCheckedIn
-      ).length;
-
-    const cashPendingCount =
-      passengers.filter(
-        (passenger) => {
-          return (
-            isCashReservation(passenger) &&
-            !isCashCollected(passenger)
-          );
-        }
-      ).length;
-
-    if (
-      totalElement
-    ) {
-      totalElement.textContent =
-        String(
-          passengers.length
-        );
-    }
-
-    if (
-      checkedElement
-    ) {
-      checkedElement.textContent =
-        String(
-          checkedCount
-        );
-    }
-
-    if (
-      cashPendingElement
-    ) {
-      cashPendingElement.textContent =
-        String(
-          cashPendingCount
-        );
-    }
-
-    if (
-      visibleElement
-    ) {
-      visibleElement.textContent =
-        String(
-          filteredPassengers.length
-        );
-    }
   }
+
+  if (
+    checkedElement
+  ) {
+    checkedElement.textContent =
+      String(
+        checkedCount
+      );
+  }
+
+  if (
+    visibleElement
+  ) {
+    visibleElement.textContent =
+      String(
+        filteredPassengers.length
+      );
+  }
+}
 
   function renderTable(list) {
     const tbody =
