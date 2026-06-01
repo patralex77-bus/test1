@@ -8,6 +8,9 @@ import qrcode
 import hmac
 import hashlib
 import qrcode.image.svg
+
+from io import BytesIO
+
 from datetime import datetime, date, timedelta, time
 from pathlib import Path
 from urllib.parse import quote
@@ -17,7 +20,7 @@ from pydantic import BaseModel
 from decimal import Decimal, InvalidOperation
 
 from fastapi import FastAPI, Request, Depends, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -36,6 +39,8 @@ from reportlab.pdfgen import canvas
 from reportlab.graphics.barcode.qr import QrCodeWidget
 from reportlab.graphics.shapes import Drawing
 from reportlab.graphics import renderPDF, renderSVG 
+ 
+ 
 
 
 
@@ -269,6 +274,107 @@ class AdminAssignSeatPayload(BaseModel):
     seat_no: str
 
 
+def _dashboard_virtual_passenger_id(booking_id: int, seat_index: int) -> int:
+    """
+    Отрицателен pseudo passenger id за dashboard ред, когато има BookingSeat,
+    но липсва реален TripPassenger row.
+
+    Пример: booking_id=123, seat_index=1 -> -123002
+    """
+    return -((int(booking_id) * 1000) + int(seat_index) + 1)
+
+
+def _decode_dashboard_virtual_passenger_id(value: int) -> tuple[int, int] | None:
+    """
+    Връща (booking_id, seat_index) за отрицателен pseudo id.
+    """
+    try:
+        raw = abs(int(value))
+    except Exception:
+        return None
+
+    if raw < 1001:
+        return None
+
+    booking_id = raw // 1000
+    seat_pos = raw % 1000
+    if booking_id <= 0 or seat_pos <= 0:
+        return None
+
+    return booking_id, seat_pos - 1
+
+
+def _assign_dashboard_virtual_booking_seat(
+    db: Session,
+    booking_id: int,
+    seat_index: int,
+    seat_no: str,
+) -> dict:
+    """
+    Позволява бутонът „Смени място“ да работи и за synthetic dashboard редове.
+    Това са случаи, в които booking има места/qty, но няма достатъчно TripPassenger rows.
+    """
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if not re.fullmatch(r"\d{1,2}", seat_no):
+        raise HTTPException(status_code=400, detail="Invalid seat number")
+
+    resolved_trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
+    if resolved_trip_id:
+        booking.trip_id = resolved_trip_id
+
+    if not _ensure_booking_has_service(db, booking):
+        raise HTTPException(status_code=400, detail="Booking has no trip/service")
+
+    allowed = set(_service_default_seat_map(booking))
+    if seat_no not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid seat number")
+
+    required_count = max(_booking_passenger_count(db, booking), int(seat_index) + 1, 1)
+    rows = _ensure_booking_seat_rows(db, booking, required_count)
+    rows = sorted(rows, key=lambda r: int(getattr(r, "id", 0) or 0))
+
+    # Проверка срещу други bookings в същия service.
+    taken_by_others = _service_taken_seats(db, booking, exclude_booking_id=booking.id)
+    if seat_no in taken_by_others:
+        raise HTTPException(status_code=409, detail="Seat already taken")
+
+    # Проверка срещу други места в същия booking.
+    for idx, row in enumerate(rows):
+        if idx == seat_index:
+            continue
+        existing = str(getattr(row, "seat_no", None) or "").strip()
+        if existing and existing == seat_no:
+            raise HTTPException(status_code=409, detail="Seat already taken")
+
+    target = rows[seat_index]
+    target.trip_id = getattr(booking, "trip_id", None)
+    target.seat_no = seat_no
+    target.is_final = True
+    target.selection_mode = "admin_dashboard"
+
+    normalized_seats: list[str] = []
+    for row in rows:
+        s = str(getattr(row, "seat_no", None) or "").strip()
+        if s and s not in normalized_seats:
+            normalized_seats.append(s)
+
+    _sync_booking_seats_to_trip_passengers(db, booking.id, normalized_seats)
+    db.commit()
+
+    return {
+        "ok": True,
+        "passenger_id": _dashboard_virtual_passenger_id(booking.id, seat_index),
+        "booking_id": booking.id,
+        "seat_index": seat_index,
+        "seat_no": seat_no,
+        "seat_locked_by_admin": False,
+        "virtual": True,
+    }
+
+
 @app.post("/admin/passengers/{passenger_id}/assign-seat")
 def admin_assign_passenger_seat(
     passenger_id: int,
@@ -280,50 +386,144 @@ def admin_assign_passenger_seat(
     if r:
         raise HTTPException(status_code=403, detail="Admin only")
 
-    passenger = db.query(TripPassenger).filter(TripPassenger.id == passenger_id).first()
-    if not passenger:
-        raise HTTPException(status_code=404, detail="Passenger not found")
-
     seat_no = (payload.seat_no or "").strip()
     if not re.fullmatch(r"\d{1,2}", seat_no):
         raise HTTPException(status_code=400, detail="Invalid seat number")
 
-    trip_id = getattr(passenger, "trip_id", None)
+    # Negative IDs са synthetic dashboard rows за bookings,
+    # които имат BookingSeat/qty, но нямат достатъчно TripPassenger rows.
+    if int(passenger_id) < 0:
+        decoded = _decode_dashboard_virtual_passenger_id(passenger_id)
+        if not decoded:
+            raise HTTPException(status_code=404, detail="Passenger not found")
 
-    if not trip_id and getattr(passenger, "booking_id", None):
+        booking_id, seat_index = decoded
+        return _assign_dashboard_virtual_booking_seat(
+            db=db,
+            booking_id=booking_id,
+            seat_index=seat_index,
+            seat_no=seat_no,
+        )
+
+    passenger = db.query(TripPassenger).filter(TripPassenger.id == passenger_id).first()
+    if not passenger:
+        raise HTTPException(status_code=404, detail="Passenger not found")
+
+    booking = None
+    if getattr(passenger, "booking_id", None):
         booking = (
             db.query(Booking)
             .filter(Booking.id == passenger.booking_id)
             .first()
         )
 
-        if booking:
-            trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
+    trip_id = getattr(passenger, "trip_id", None)
 
-            if trip_id:
-                passenger.trip_id = trip_id
-                db.flush()
+    if booking:
+        resolved_trip_id = getattr(booking, "trip_id", None) or _resolve_booking_trip_id(db, booking)
+        if resolved_trip_id:
+            booking.trip_id = resolved_trip_id
+            passenger.trip_id = resolved_trip_id
+            trip_id = resolved_trip_id
+            db.flush()
 
     if not trip_id:
         raise HTTPException(status_code=400, detail="Passenger has no trip")
 
-    others = (
-        db.query(TripPassenger)
-        .filter(TripPassenger.trip_id == trip_id)
-        .filter(TripPassenger.id != passenger.id)
-        .all()
-    )
+    # 1) Проверка дали мястото е валидно за layout-а.
+    allowed = set(_service_default_seat_map(booking))
+    if seat_no not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid seat number")
 
-    for other in others:
-        other_effective_seat = str(
-            getattr(other, "manual_seat_no", None)
-            or getattr(other, "seat_no", None)
-            or ""
-        ).strip()
+    # 2) Проверка срещу други bookings в същия service/trip.
+    # Това е важно за portal Seat Map, защото BookingSeat може да има заето място,
+    # дори TripPassenger редът да липсва или да не е linked.
+    if booking:
+        taken_by_other_bookings = _service_taken_seats(
+            db=db,
+            booking=booking,
+            exclude_booking_id=booking.id,
+        )
 
-        if other_effective_seat == seat_no:
+        if seat_no in taken_by_other_bookings:
             raise HTTPException(status_code=409, detail="Seat already taken")
 
+        # 3) Проверка срещу други пътници в същия booking.
+        same_booking_passengers = (
+            db.query(TripPassenger)
+            .filter(TripPassenger.booking_id == booking.id)
+            .filter(TripPassenger.id != passenger.id)
+            .all()
+        )
+
+        for other in same_booking_passengers:
+            other_seat = _effective_trip_passenger_seat(other)
+            if other_seat == seat_no:
+                raise HTTPException(status_code=409, detail="Seat already taken")
+
+        # 4) Проверка срещу други BookingSeat редове в същия booking.
+        booking_seat_rows = (
+            db.query(BookingSeat)
+            .filter(
+                BookingSeat.booking_id == booking.id,
+                BookingSeat.is_final == True,
+                BookingSeat.seat_no.isnot(None),
+            )
+            .order_by(BookingSeat.id.asc())
+            .all()
+        )
+
+        linked_passengers = (
+            db.query(TripPassenger)
+            .filter(TripPassenger.booking_id == booking.id)
+            .order_by(TripPassenger.id.asc())
+            .all()
+        )
+        linked_passengers = sorted(linked_passengers, key=_trip_passenger_sort_key)
+
+        passenger_index = 0
+        for idx, p in enumerate(linked_passengers):
+            if int(getattr(p, "id", 0) or 0) == int(passenger.id):
+                passenger_index = idx
+                break
+
+        for idx, row in enumerate(booking_seat_rows):
+            if idx == passenger_index:
+                continue
+
+            row_seat = str(getattr(row, "seat_no", None) or "").strip()
+            if row_seat == seat_no:
+                raise HTTPException(status_code=409, detail="Seat already taken")
+
+    else:
+        # Fallback за passenger без booking_id:
+        # гледаме TripPassenger + BookingSeat директно по trip_id.
+        other_passengers = (
+            db.query(TripPassenger)
+            .filter(TripPassenger.trip_id == trip_id)
+            .filter(TripPassenger.id != passenger.id)
+            .all()
+        )
+
+        for other in other_passengers:
+            other_seat = _effective_trip_passenger_seat(other)
+            if other_seat == seat_no:
+                raise HTTPException(status_code=409, detail="Seat already taken")
+
+        other_booking_seats = (
+            db.query(BookingSeat)
+            .filter(
+                BookingSeat.trip_id == trip_id,
+                BookingSeat.is_final == True,
+                BookingSeat.seat_no == seat_no,
+            )
+            .all()
+        )
+
+        if other_booking_seats:
+            raise HTTPException(status_code=409, detail="Seat already taken")
+
+    # 5) Запис в TripPassenger.
     if hasattr(passenger, "manual_seat_no"):
         passenger.manual_seat_no = seat_no
     else:
@@ -331,6 +531,15 @@ def admin_assign_passenger_seat(
 
     if hasattr(passenger, "seat_locked_by_admin"):
         passenger.seat_locked_by_admin = True
+
+    # 6) ВАЖНО:
+    # Синхронизация към BookingSeat, за да вижда portal Seat Map актуалното място.
+    if booking:
+        _sync_admin_passenger_seat_to_booking_seat(
+            db=db,
+            passenger=passenger,
+            seat_no=seat_no,
+        )
 
     db.commit()
 
@@ -553,6 +762,7 @@ def _build_dashboard_direction_payload(
     taken_seats = set(str(x).strip() for x in (extra_taken_seats or []) if str(x).strip())
     passengers_payload: list[dict] = []
     represented_booking_ids: set[int] = set()
+    represented_count_by_booking_id: dict[int, int] = {}
     booking_confirmed_total = 0
 
     def _split_name_parts(full_name: str) -> tuple[str | None, str | None]:
@@ -564,14 +774,44 @@ def _build_dashboard_direction_payload(
             return parts[0], None
         return parts[0], parts[1]
 
+    booking_by_id_for_dashboard: dict[int, Booking] = {}
+    booking_by_external_id_for_dashboard: dict[str, Booking] = {}
+    for booking in items or []:
+        bid = getattr(booking, "id", None)
+        if bid is not None:
+            booking_by_id_for_dashboard[int(bid)] = booking
+
+        ext_key = _booking_external_id_key(booking)
+        if ext_key and ext_key not in booking_by_external_id_for_dashboard:
+            booking_by_external_id_for_dashboard[ext_key] = booking
+
     for p in sorted(list(trip_passengers or []), key=_trip_passenger_sort_key):
         seat_no = _effective_trip_passenger_seat(p)
         if seat_no:
             taken_seats.add(seat_no)
 
         booking_id = getattr(p, "booking_id", None)
+        effective_booking_id_for_count = None
+
         if booking_id is not None:
-            represented_booking_ids.add(int(booking_id))
+            effective_booking_id_for_count = int(booking_id)
+        else:
+            # Ако TripPassenger редът още не е linked с booking_id,
+            # броим го към booking-а чрез external_id, за да не създаваме
+            # duplicate synthetic ред в dashboard.
+            p_ext_key = _trip_passenger_external_id_key(
+                p,
+                booking_by_id=booking_by_id_for_dashboard,
+            )
+            matched_booking = booking_by_external_id_for_dashboard.get(p_ext_key or "")
+            if matched_booking and getattr(matched_booking, "id", None) is not None:
+                effective_booking_id_for_count = int(matched_booking.id)
+
+        if effective_booking_id_for_count is not None:
+            represented_booking_ids.add(effective_booking_id_for_count)
+            represented_count_by_booking_id[effective_booking_id_for_count] = (
+                represented_count_by_booking_id.get(effective_booking_id_for_count, 0) + 1
+            )
 
         full_name = _effective_text(
             getattr(p, "manual_full_name", None),
@@ -603,16 +843,57 @@ def _build_dashboard_direction_payload(
 
     for booking in items or []:
         booking_id = getattr(booking, "id", None)
+        booking_id_int = int(booking_id or 0)
         booking_pax_count = max(1, int(getattr(booking, "_dashboard_passenger_count", 0) or 1))
         booking_confirmed_total += booking_pax_count
 
-        for seat_no in list(getattr(booking, "_dashboard_final_seats", None) or _booking_selected_seats(booking) or []):
-            seat_str = str(seat_no or "").strip()
-            if seat_str:
-                taken_seats.add(seat_str)
+        final_seats = [
+            str(x or "").strip()
+            for x in list(getattr(booking, "_dashboard_final_seats", None) or _booking_selected_seats(booking) or [])
+            if str(x or "").strip()
+        ]
 
-        if booking_id is not None and int(booking_id) in represented_booking_ids:
+        for seat_str in final_seats:
+            taken_seats.add(seat_str)
+
+        if not booking_id_int:
             continue
+
+        represented_count = int(represented_count_by_booking_id.get(booking_id_int, 0) or 0)
+        missing_count = max(0, booking_pax_count - represented_count)
+        if missing_count <= 0:
+            continue
+
+        # Ако booking има места/qty, но няма достатъчно TripPassenger rows,
+        # показваме synthetic редове в dashboard Passengers. Така Seat Map и
+        # Passengers таблицата не се разминават. ID-то е отрицателно и route-ът
+        # /admin/passengers/{id}/assign-seat го обработва като booking-seat ред.
+        booking_first_name = getattr(booking, "first_name", None)
+        booking_last_name = getattr(booking, "last_name", None)
+        base_name = f"{booking_first_name or ''} {booking_last_name or ''}".strip() or "—"
+        booking_phone = str(getattr(booking, "phone", None) or "").strip() or None
+
+        for offset in range(missing_count):
+            passenger_index = represented_count + offset
+            seat_no = final_seats[passenger_index] if passenger_index < len(final_seats) else None
+
+            display_last_name = booking_last_name
+            passenger_name = base_name
+            if booking_pax_count > 1:
+                passenger_name = f"{base_name} ({passenger_index + 1})"
+
+            passengers_payload.append({
+                "id": _dashboard_virtual_passenger_id(booking_id_int, passenger_index),
+                "virtual": True,
+                "trip_id": getattr(booking, "trip_id", None),
+                "booking_id": booking_id_int,
+                "first_name": booking_first_name,
+                "last_name": display_last_name,
+                "passenger_name": passenger_name,
+                "phone": booking_phone,
+                "seat_no": seat_no or None,
+                "seat_locked_by_admin": False,
+            })
 
     if total_confirmed is None:
         total_confirmed = max(booking_confirmed_total, len(passengers_payload))
@@ -705,44 +986,93 @@ def portal_payment_qr_svg(request: Request, db: Session = Depends(get_db)):
 # QR Ticket
 # =======================
 
-
 def _portal_ticket_qr_svg_response(
     request: Request,
     db: Session,
     as_attachment: bool = False,
     seat_no: str | None = None,
 ):
-    """Backward-compatible QR response helper with optional seat selection."""
-    booking, redirect_resp = _portal_booking_or_redirect(request, db)
+    """
+    Генерира QR код за конкретен билет.
+
+    Backward-compatible:
+    - ако е подадено seat_no, QR кодът е за конкретното място;
+    - ако seat_no липсва, използва първото FINAL място.
+
+    Така старите линкове към /portal/ticket/qr продължават да работят,
+    а новите билети могат да имат отделен QR код за всяко място.
+    """
+    booking, redirect_resp = _portal_booking_or_redirect(
+        request,
+        db,
+    )
+
     if redirect_resp:
         return redirect_resp
 
     if not _can_portal_view_ticket(booking):
         return Response(status_code=404)
 
-    selected_seat = _resolve_requested_ticket_seat(booking, seat_no)
-    if not selected_seat or not _ticket_qr_available(booking):
+    selected_seat = _resolve_requested_ticket_seat(
+        booking,
+        seat_no,
+    )
+
+    if (
+        not selected_seat
+        or not _ticket_qr_available(booking)
+    ):
         return Response(status_code=404)
 
     trip = None
+
     if getattr(booking, "trip_id", None):
-        trip = db.query(Trip).filter(Trip.id == booking.trip_id).first()
-
-    passenger = _find_ticket_passenger_for_seat(db, booking, selected_seat)
-    payload = _portal_ticket_payload(booking, selected_seat, passenger=passenger, trip=trip)
-    qr_data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    svg_bytes = _build_qr_svg_bytes(qr_data, size=260)
-
-    headers = {"Cache-Control": "no-store"}
-    if as_attachment:
-        headers["Content-Disposition"] = (
-            f'attachment; filename="ticket-qr-{booking.external_id}-seat-{selected_seat}.svg"'
+        trip = (
+            db.query(Trip)
+            .filter(Trip.id == booking.trip_id)
+            .first()
         )
 
-    return Response(content=svg_bytes, media_type="image/svg+xml", headers=headers)
+    passenger = _find_ticket_passenger_for_seat(
+        db,
+        booking,
+        selected_seat,
+    )
 
+    payload = _portal_ticket_payload(
+        booking=booking,
+        selected_seat=selected_seat,
+        passenger=passenger,
+        trip=trip,
+    )
 
+    qr_data = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
+    svg_bytes = _build_qr_svg_bytes(
+        qr_data,
+        size=260,
+    )
+
+    headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+    }
+
+    if as_attachment:
+        headers["Content-Disposition"] = (
+            f'attachment; '
+            f'filename="ticket-qr-{booking.external_id}-seat-{selected_seat}.svg"'
+        )
+
+    return Response(
+        content=svg_bytes,
+        media_type="image/svg+xml",
+        headers=headers,
+    )
 
 def _booking_is_cancelled_or_pending_cancellation(booking: Booking | None) -> bool:
     if not booking:
@@ -1310,31 +1640,26 @@ def _service_default_seat_map(_: Booking | None = None) -> list[str]:
     return out
 
 
-
 def _norm_stop_key(value: str | None) -> str:
-    """
-    Нормализира имената на спирки и градове.
-
-    Поддържа латиница, кирилица и често срещани смесени изписвания,
-    например: Kyiv / Київ / Киів, Wien / Відень, Innsbruck / Iнсбрук.
-    """
     if not value:
         return ""
 
-    def _clean(raw: str) -> str:
-        text_value = str(raw or "").strip().lower()
-        text_value = re.sub(r"\s+", " ", text_value)
-        text_value = (
-            text_value
-            .replace("ї", "і")
-            .replace("ï", "i")
-            .replace("ı", "i")
-            .replace("`", "'")
-            .replace("’", "'")
-        )
-        return text_value
+    def _clean(v: str) -> str:
+        x = str(v or "").strip().lower()
+        x = re.sub(r"\s+", " ", x)
 
-    normalized = _clean(value)
+        # Unicode / keyboard variants
+        x = (
+            x.replace("ї", "і")
+             .replace("ï", "i")
+             .replace("ı", "i")
+             .replace("`", "'")
+             .replace("’", "'")
+        )
+
+        return x
+
+    s = _clean(value)
 
     aliases = {
         "kyiv": [
@@ -1350,8 +1675,10 @@ def _norm_stop_key(value: str | None) -> str:
         "lviv": [
             "lviv", "lvov", "львів", "львiв", "львов",
         ],
+
         "wien": [
-            "wien", "vienna", "відень", "вiдень", "видень", "віден", "wien hbf",
+            "wien", "vienna",
+            "відень", "вiдень", "видень", "віден", "wien hbf",
         ],
         "stpolten": [
             "st. pölten", "st pölten", "st.polten", "st polten",
@@ -1365,11 +1692,13 @@ def _norm_stop_key(value: str | None) -> str:
             "wels", "вельс",
         ],
         "salzburg": [
-            "salzburg", "salzburg sud", "salzburg süd", "sud", "süd",
-            "p&r süd salzburg", "p+r süd salzburg", "зальцбург",
+            "salzburg", "salzburg sud", "salzburg süd",
+            "sud", "süd", "p&r süd salzburg", "p+r süd salzburg",
+            "зальцбург",
         ],
         "innsbruck": [
-            "innsbruck", "інсбрук", "iнсбрук", "iнсбрук", "инсбрук",
+            "innsbruck",
+            "інсбрук", "iнсбрук", "инсбрук", "iнсбрук",
         ],
         "bruck": [
             "bruck", "bruck an der mur", "брук", "брук ан дер мур",
@@ -1387,11 +1716,11 @@ def _norm_stop_key(value: str | None) -> str:
 
     for key, variants in aliases.items():
         for variant in variants:
-            variant_normalized = _clean(variant)
-            if normalized == variant_normalized or variant_normalized in normalized:
+            vv = _clean(variant)
+            if s == vv or vv in s:
                 return key
 
-    return normalized
+    return s
 
 
 def _stop_meta(value: str | None) -> dict:
@@ -1431,20 +1760,23 @@ def _contains_any_token(text: str, variants: list[str]) -> bool:
     return any(v in text for v in variants)
 
 
-
 def _direction_code_from_values(from_value: str | None, to_value: str | None) -> str | None:
-    """Връща IK / KI чрез canonical stop keys."""
-    from_key = _norm_stop_key(from_value)
-    to_key = _norm_stop_key(to_value)
+    f = _norm_service_part(from_value)
+    t = _norm_service_part(to_value)
 
-    if from_key == "innsbruck" and to_key == "kyiv":
+    if not f or not t:
+        return None
+
+    innsbruck_variants = ["innsbruck", "інсбрук", "инсбрук", "iнсбрук"]
+    kyiv_variants = ["kyiv", "kiev", "київ", "киев", "киïв", "київ"]
+
+    if _contains_any_token(f, innsbruck_variants) and _contains_any_token(t, kyiv_variants):
         return "IK"
 
-    if from_key == "kyiv" and to_key == "innsbruck":
+    if _contains_any_token(f, kyiv_variants) and _contains_any_token(t, innsbruck_variants):
         return "KI"
 
     return None
-
 
 
 def _booking_direction_code(booking: Booking) -> str:
@@ -1629,37 +1961,83 @@ def _normalize_ticket_seat_no(value) -> str:
       "50.0"   -> "50"
       " 51 "   -> "51"
     """
-    text_value = str(value or "").strip()
-    if not text_value:
+    text = str(value or "").strip()
+
+    if not text:
         return ""
 
-    if re.fullmatch(r"\d+\.0+", text_value):
-        text_value = re.sub(r"\.0+$", "", text_value)
+    if re.fullmatch(r"\d+\.0+", text):
+        text = re.sub(r"\.0+$", "", text)
 
-    return text_value
+    return text
 
 
 def _ticket_seat_sort_key(value: str):
-    text_value = _normalize_ticket_seat_no(value)
-    if text_value.isdigit():
-        return (0, int(text_value))
-    return (1, text_value.casefold())
+    """
+    Сортира числовите места правилно:
+      2, 3, 10, 11
+    вместо:
+      10, 11, 2, 3
+    """
+    text = _normalize_ticket_seat_no(value)
+
+    if text.isdigit():
+        return (0, int(text))
+
+    return (1, text.casefold())
 
 
-def _booking_selected_seats(booking: Booking) -> list[str]:
+def _booking_selected_seats(
+    db_or_booking,
+    booking: Booking | None = None,
+) -> list[str]:
     """
     Връща всички FINAL seats за booking-а.
 
-    Функцията остава с един аргумент за backward compatibility.
-    Не добавяй втори helper със същото име и различна сигнатура.
+    Поддържа и двата начина на извикване:
+      _booking_selected_seats(booking)
+      _booking_selected_seats(db, booking)
+
+    Когато има db session, чете директно от BookingSeat.
+    Иначе използва relationship-а booking.seats.
     """
-    seats = list(getattr(booking, "seats", []) or [])
+    if booking is None:
+        db = None
+        booking = db_or_booking
+    else:
+        db = db_or_booking
+
+    if not booking:
+        return []
+
+    rows = []
+
+    if db is not None and getattr(booking, "id", None):
+        try:
+            rows = (
+                db.query(BookingSeat)
+                .filter(
+                    BookingSeat.booking_id == int(booking.id),
+                    BookingSeat.is_final.is_(True),
+                    BookingSeat.seat_no.isnot(None),
+                )
+                .order_by(BookingSeat.id.asc())
+                .all()
+            )
+        except Exception:
+            rows = []
+
+    if not rows:
+        rows = list(getattr(booking, "seats", []) or [])
+
     out: list[str] = []
     seen: set[str] = set()
 
-    for seat_row in seats:
-        seat_no = _normalize_ticket_seat_no(getattr(seat_row, "seat_no", None))
-        is_final = bool(getattr(seat_row, "is_final", False))
+    for row in rows:
+        seat_no = _normalize_ticket_seat_no(
+            getattr(row, "seat_no", None)
+        )
+        is_final = bool(getattr(row, "is_final", False))
 
         if not seat_no or not is_final or seat_no in seen:
             continue
@@ -1669,7 +2047,6 @@ def _booking_selected_seats(booking: Booking) -> list[str]:
 
     out.sort(key=_ticket_seat_sort_key)
     return out
-
 
 
 def _booking_selected_seat(booking: Booking) -> str | None:
@@ -2051,17 +2428,107 @@ def _apply_booking_seat_assignment(
 
 
 
+def _sync_admin_passenger_seat_to_booking_seat(
+    db: Session,
+    passenger: TripPassenger,
+    seat_no: str,
+) -> None:
+    """
+    Когато админ сменя място директно върху TripPassenger,
+    синхронизираме и BookingSeat row-а.
+
+    Така:
+      - admin dashboard
+      - BookingSeat final seats
+      - portal /portal/seats/state
+      - portal ticket
+      - passenger Seat Map
+
+    виждат едно и също място.
+    """
+    booking_id = getattr(passenger, "booking_id", None)
+    if not booking_id:
+        return
+
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        return
+
+    resolved_trip_id = (
+        getattr(booking, "trip_id", None)
+        or getattr(passenger, "trip_id", None)
+        or _resolve_booking_trip_id(db, booking)
+    )
+
+    if resolved_trip_id:
+        booking.trip_id = resolved_trip_id
+        passenger.trip_id = resolved_trip_id
+
+    linked_passengers = (
+        db.query(TripPassenger)
+        .filter(TripPassenger.booking_id == booking.id)
+        .order_by(TripPassenger.id.asc())
+        .all()
+    )
+    linked_passengers = sorted(linked_passengers, key=_trip_passenger_sort_key)
+
+    passenger_index = 0
+    for idx, p in enumerate(linked_passengers):
+        if int(getattr(p, "id", 0) or 0) == int(getattr(passenger, "id", 0) or 0):
+            passenger_index = idx
+            break
+
+    required_count = max(
+        _booking_passenger_count(db, booking),
+        len(linked_passengers),
+        passenger_index + 1,
+        1,
+    )
+
+    rows = _ensure_booking_seat_rows(db, booking, required_count)
+    rows = sorted(rows, key=lambda r: int(getattr(r, "id", 0) or 0))
+
+    # Записваме конкретното място на конкретния пътник в съответния BookingSeat index.
+    target_row = rows[passenger_index]
+    target_row.trip_id = resolved_trip_id
+    target_row.seat_no = str(seat_no or "").strip() or None
+    target_row.is_final = bool(target_row.seat_no)
+    target_row.selection_mode = "admin_dashboard"
+
+    # Допълнително синхронизираме всички linked passengers,
+    # за да няма разминаване между TripPassenger и BookingSeat.
+    for idx, p in enumerate(linked_passengers):
+        if idx >= len(rows):
+            break
+
+        p_seat = _effective_trip_passenger_seat(p)
+        p_seat = str(p_seat or "").strip()
+
+        if not p_seat:
+            continue
+
+        rows[idx].trip_id = resolved_trip_id
+        rows[idx].seat_no = p_seat
+        rows[idx].is_final = True
+
+        if not getattr(rows[idx], "selection_mode", None):
+            rows[idx].selection_mode = "admin_dashboard"
+
+    db.flush()
+
+
 def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
     """
     Намира Trip за booking.
 
-    Seat Map трябва да се връзва по реалния автобус/service:
+    Най-важно:
+    Seat Map трябва да се връзва по реалния автобус:
       booking.booking_date + booking.bus_from + booking.bus_to
 
-    route_from/route_to може да е само клиентски сегмент, например:
+    route_from/route_to може да е само клиентски сегмент:
       Київ -> Відень
 
-    bus_from/bus_to е реалният service, например:
+    bus_from/bus_to е реалният service:
       Київ -> Iнсбрук
     """
     if not booking:
@@ -2070,7 +2537,7 @@ def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
     if getattr(booking, "trip_id", None):
         return booking.trip_id
 
-    # 1) Official matcher.
+    # 1) пробваме official matcher
     try:
         rematch_booking_to_trip(db, booking.id)
         db.flush()
@@ -2081,8 +2548,8 @@ def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
     if getattr(booking, "trip_id", None):
         return booking.trip_id
 
-    # 2) Fallback през linked passenger.
-    linked_passenger = (
+    # 2) fallback през linked TripPassenger
+    linked_p = (
         db.query(TripPassenger)
         .filter(
             TripPassenger.booking_id == booking.id,
@@ -2092,8 +2559,8 @@ def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
         .first()
     )
 
-    if linked_passenger and linked_passenger.trip_id:
-        booking.trip_id = linked_passenger.trip_id
+    if linked_p and linked_p.trip_id:
+        booking.trip_id = linked_p.trip_id
         db.flush()
         return booking.trip_id
 
@@ -2102,7 +2569,10 @@ def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
         return None
 
     try:
-        booking_date_only = booking_date.date() if isinstance(booking_date, datetime) else booking_date
+        if isinstance(booking_date, datetime):
+            booking_date_only = booking_date.date()
+        else:
+            booking_date_only = booking_date
     except Exception:
         return None
 
@@ -2118,7 +2588,7 @@ def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
         .all()
     )
 
-    # 3) Най-силен match: реалният автобус bus_from / bus_to.
+    # 3) най-силен match: bus_from / bus_to
     booking_bus_from_key = _norm_stop_key(getattr(booking, "bus_from", None))
     booking_bus_to_key = _norm_stop_key(getattr(booking, "bus_to", None))
 
@@ -2132,7 +2602,7 @@ def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
                 db.flush()
                 return booking.trip_id
 
-    # 4) Fallback: клиентският route_from / route_to.
+    # 4) fallback: route_from / route_to
     booking_route_from_key = _norm_stop_key(getattr(booking, "route_from", None))
     booking_route_to_key = _norm_stop_key(getattr(booking, "route_to", None))
 
@@ -2146,25 +2616,7 @@ def _resolve_booking_trip_id(db: Session, booking: Booking) -> int | None:
                 db.flush()
                 return booking.trip_id
 
-    # 5) Последен безопасен fallback: ако има точно един trip в същото направление.
-    direction_code = _booking_direction_code(booking)
-    if direction_code in {"IK", "KI"}:
-        matching_direction = [
-            trip
-            for trip in trips_same_date
-            if _direction_code_from_values(
-                getattr(trip, "route_from", None),
-                getattr(trip, "route_to", None),
-            ) == direction_code
-        ]
-
-        if len(matching_direction) == 1:
-            booking.trip_id = matching_direction[0].id
-            db.flush()
-            return booking.trip_id
-
     return None
-
 
 
 def _norm_service_part(value: str | None) -> str:
@@ -2176,11 +2628,11 @@ def _norm_service_part(value: str | None) -> str:
 
 
 
-def _service_date_key_from_booking(booking: Booking | None) -> str | None:
-    if not booking:
-        return None
 
+
+def _service_date_key_from_booking(booking: Booking) -> str | None:
     booking_date = getattr(booking, "booking_date", None)
+
     if not booking_date:
         return None
 
@@ -2195,6 +2647,11 @@ def _service_date_key_from_booking(booking: Booking | None) -> str | None:
 
 
 def _service_stop_key(value: str | None) -> str:
+    """
+    Нормализира stop/service име.
+    ВАЖНО: ползва _norm_stop_key, защото там вече имаме aliases:
+    Київ/Kyiv, Відень/Wien, Iнсбрук/Innsbruck и т.н.
+    """
     key = _norm_stop_key(value)
     return (key or "").strip().lower()
 
@@ -2206,11 +2663,13 @@ def _booking_service_candidate_keys(
     """
     Връща всички възможни service keys за booking.
 
-    Приоритет:
-      - trip_id
-      - booking_date + реален автобус bus_from / bus_to
-      - booking_date + direction code
-      - booking_date + route_from / route_to
+    Цел:
+    - ако има trip_id -> най-силен key: ("trip", trip_id)
+    - ако няма trip_id -> ползва booking_date + bus_from/bus_to
+    - fallback: booking_date + direction_code
+    - fallback: booking_date + route_from/route_to
+
+    Това оправя portal seat map, когато booking.trip_id е NULL.
     """
     if booking is None:
         db = None
@@ -2219,10 +2678,12 @@ def _booking_service_candidate_keys(
         db = db_or_booking
 
     keys: set[tuple[str, str]] = set()
+
     if not booking:
         return keys
 
     trip_id = getattr(booking, "trip_id", None)
+
     if not trip_id and db is not None:
         try:
             trip_id = _resolve_booking_trip_id(db, booking)
@@ -2241,16 +2702,20 @@ def _booking_service_candidate_keys(
 
     bus_from = _service_stop_key(getattr(booking, "bus_from", None))
     bus_to = _service_stop_key(getattr(booking, "bus_to", None))
+
     route_from = _service_stop_key(getattr(booking, "route_from", None))
     route_to = _service_stop_key(getattr(booking, "route_to", None))
 
+    # Най-важният fallback: реалният автобус/service.
     if bus_from and bus_to:
         keys.add(("service", f"{date_key}|bus|{bus_from}->{bus_to}"))
 
+    # Стар direction fallback: KI / IK.
     direction_code = _booking_direction_code(booking)
     if direction_code and direction_code not in {"OTHER", ""}:
         keys.add(("service", f"{date_key}|dir|{direction_code}"))
 
+    # Fallback route, ако няма bus fields.
     if route_from and route_to:
         keys.add(("service", f"{date_key}|route|{route_from}->{route_to}"))
 
@@ -2260,12 +2725,14 @@ def _booking_service_candidate_keys(
 def _booking_service_key(db_or_booking, booking: Booking | None = None):
     """
     Backward-compatible wrapper.
-    Връща един service key, като trip key е най-силен.
+    Връща един key, но вече базиран върху candidate keys.
     """
     keys = _booking_service_candidate_keys(db_or_booking, booking)
+
     if not keys:
         return None
 
+    # trip key е най-силен
     for key in keys:
         if key[0] == "trip":
             return key
@@ -2275,44 +2742,231 @@ def _booking_service_key(db_or_booking, booking: Booking | None = None):
 
 
 
+def _booking_date_key_for_seats(booking: Booking | None) -> str:
+    if not booking:
+        return ""
 
-def _service_keys_match(
-    current_keys: set[tuple[str, str]],
-    other_keys: set[tuple[str, str]],
-) -> bool:
+    booking_date = getattr(booking, "booking_date", None)
+    if not booking_date:
+        return ""
+
+    try:
+        if isinstance(booking_date, datetime):
+            return booking_date.date().isoformat()
+        if isinstance(booking_date, date):
+            return booking_date.isoformat()
+        return datetime.fromisoformat(str(booking_date)).date().isoformat()
+    except Exception:
+        return str(booking_date).strip()
+
+
+def _booking_route_keys_for_seats(booking: Booking | None) -> set[tuple[str, str]]:
     """
-    Съпоставя два service key набора без да смесва различни автобуси,
-    които пътуват в една и съща посока на една и съща дата.
+    Връща възможните route/service keys за booking-а.
+
+    Причина:
+    При едни booking-и маршрутът е в route_from/route_to,
+    при други в bus_from/bus_to.
+    За seat map трябва да хващаме и двата варианта.
     """
+    if not booking:
+        return set()
+
+    pairs = [
+        (
+            getattr(booking, "route_from", None),
+            getattr(booking, "route_to", None),
+        ),
+        (
+            getattr(booking, "bus_from", None),
+            getattr(booking, "bus_to", None),
+        ),
+    ]
+
+    out: set[tuple[str, str]] = set()
+
+    for a, b in pairs:
+        a_key = _norm_stop_key(a) or _norm_service_part(a)
+        b_key = _norm_stop_key(b) or _norm_service_part(b)
+
+        if a_key and b_key:
+            out.add((a_key, b_key))
+
+    # fallback по direction code, когато конкретните имена са различно записани
+    direction_code = _booking_direction_code(booking)
+    if direction_code in {"IK", "KI"}:
+        out.add(("direction", direction_code))
+
+    return out
+
+
+def _portal_service_date_key(db: Session | None, booking: Booking | None) -> str | None:
+    if not booking:
+        return None
+
+    booking_date = getattr(booking, "booking_date", None)
+    if booking_date:
+        try:
+            if isinstance(booking_date, datetime):
+                return booking_date.date().isoformat()
+            if isinstance(booking_date, date):
+                return booking_date.isoformat()
+            return datetime.fromisoformat(str(booking_date)).date().isoformat()
+        except Exception:
+            s = str(booking_date).strip()
+            if s:
+                return s[:10]
+
+    try:
+        dep_dt = _booking_departure_dt_for_dispatch(db, booking)
+        if dep_dt:
+            return dep_dt.date().isoformat()
+    except Exception:
+        pass
+
+    if db is not None and getattr(booking, "trip_id", None):
+        try:
+            trip = db.query(Trip).filter(Trip.id == booking.trip_id).first()
+            if trip and getattr(trip, "date_time", None):
+                return trip.date_time.date().isoformat()
+        except Exception:
+            pass
+
+    return None
+
+
+def _portal_service_stop_key(value: str | None) -> str:
+    key = _norm_stop_key(value)
+    if key:
+        return key
+
+    s = _norm_service_part(value)
+    s = re.sub(r"[^a-zа-яіїєґ0-9]+", "_", s, flags=re.IGNORECASE).strip("_")
+    return s
+
+
+def _portal_booking_service_keys(
+    db_or_booking,
+    booking: Booking | None = None,
+) -> set[tuple]:
+    """
+    Връща всички възможни service keys за booking.
+
+    Цел:
+      - ако има trip_id -> match по trip
+      - ако няма trip_id при други booking-и -> match по дата + route/bus direction
+      - fallback: дата + AT->UA / UA->AT / IK / KI
+
+    Това е ключово за portal Seat Map.
+    """
+    if booking is None:
+        db = None
+        booking = db_or_booking
+    else:
+        db = db_or_booking
+
+    keys: set[tuple] = set()
+
+    if not booking:
+        return keys
+
+    trip = None
+    trip_id = getattr(booking, "trip_id", None)
+
+    if not trip_id and db is not None:
+        try:
+            trip_id = _resolve_booking_trip_id(db, booking)
+            if trip_id:
+                booking.trip_id = trip_id
+        except Exception:
+            trip_id = getattr(booking, "trip_id", None)
+
+    if trip_id:
+        try:
+            keys.add(("trip", str(int(trip_id))))
+        except Exception:
+            keys.add(("trip", str(trip_id)))
+
+        if db is not None:
+            try:
+                trip = db.query(Trip).filter(Trip.id == trip_id).first()
+            except Exception:
+                trip = None
+
+    date_key = _portal_service_date_key(db, booking)
+
+    route_pairs: list[tuple[str | None, str | None]] = [
+        (getattr(booking, "route_from", None), getattr(booking, "route_to", None)),
+        (getattr(booking, "bus_from", None), getattr(booking, "bus_to", None)),
+    ]
+
+    if trip:
+        route_pairs.append((
+            getattr(trip, "route_from", None),
+            getattr(trip, "route_to", None),
+        ))
+
+        if not date_key and getattr(trip, "date_time", None):
+            try:
+                date_key = trip.date_time.date().isoformat()
+            except Exception:
+                pass
+
+    if date_key:
+        for from_value, to_value in route_pairs:
+            from_key = _portal_service_stop_key(from_value)
+            to_key = _portal_service_stop_key(to_value)
+
+            if from_key and to_key:
+                keys.add(("date_route", date_key, from_key, to_key))
+
+                try:
+                    meta = _dashboard_direction_meta_from_values(from_value, to_value)
+                    direction_key = str(meta.get("key") or "").strip()
+                    if direction_key and "unknown" not in direction_key:
+                        keys.add(("date_direction", date_key, direction_key))
+                except Exception:
+                    pass
+
+        try:
+            direction_code = _booking_direction_code(booking)
+            if direction_code and direction_code != "OTHER":
+                keys.add(("date_code", date_key, direction_code))
+        except Exception:
+            pass
+
+    return keys
+
+
+def _portal_service_keys_match(current_keys: set[tuple], other_keys: set[tuple]) -> bool:
     if not current_keys or not other_keys:
         return False
 
-    current_trip = {key for key in current_keys if key[0] == "trip"}
-    other_trip = {key for key in other_keys if key[0] == "trip"}
-    if current_trip and other_trip:
-        return bool(current_trip & other_trip)
+    # 1) Най-сигурно: trip/date_route/date_code
+    strong_prefixes = {"trip", "date_route", "date_code"}
 
-    def by_marker(keys: set[tuple[str, str]], marker_value: str) -> set[tuple[str, str]]:
-        return {
-            key
-            for key in keys
-            if key[0] == "service" and f"|{marker_value}|" in key[1]
-        }
+    current_strong = {k for k in current_keys if k and k[0] in strong_prefixes}
+    other_strong = {k for k in other_keys if k and k[0] in strong_prefixes}
 
-    current_bus = by_marker(current_keys, "bus")
-    other_bus = by_marker(other_keys, "bus")
-    if current_bus and other_bus:
-        return bool(current_bus & other_bus)
+    if current_strong & other_strong:
+        return True
 
-    current_route = by_marker(current_keys, "route")
-    other_route = by_marker(other_keys, "route")
-    if current_route and other_route:
-        return bool(current_route & other_route)
+    # 2) Ако и двете страни имат exact route, но не съвпада — не ги смесваме само по AT->UA.
+    current_has_route = any(k and k[0] == "date_route" for k in current_keys)
+    other_has_route = any(k and k[0] == "date_route" for k in other_keys)
 
-    # Direction е fallback само когато няма по-точна обща bus/route информация.
-    current_direction = by_marker(current_keys, "dir")
-    other_direction = by_marker(other_keys, "dir")
+    if current_has_route and other_has_route:
+        return False
+
+    # 3) Fallback: дата + направление, напр. AT->UA / UA->AT.
+    current_direction = {k for k in current_keys if k and k[0] == "date_direction"}
+    other_direction = {k for k in other_keys if k and k[0] == "date_direction"}
+
     return bool(current_direction & other_direction)
+
+
+def _portal_service_keys_debug(keys: set[tuple]) -> list[str]:
+    return [" | ".join(str(part) for part in key) for key in sorted(keys)]
 
 
 def _service_taken_seats(
@@ -2323,12 +2977,12 @@ def _service_taken_seats(
     """
     Взима всички заети места за същия автобус/service.
 
-    Комбинира:
-      1) BookingSeat final seats
-      2) TripPassenger effective seats: manual_seat_no / seat_no
-
-    Ако booking.trip_id е NULL, service се определя и по:
+    Ключова корекция:
+    Ако booking.trip_id е NULL, service се определя по:
       booking_date + bus_from + bus_to
+
+    Не по route_from/route_to, защото това е клиентски сегмент,
+    например Київ → Відень, докато автобусът е Київ → Iнсбрук.
     """
     if not booking:
         return set()
@@ -2340,7 +2994,9 @@ def _service_taken_seats(
     taken: set[str] = set()
     current_external_id = _booking_external_id_key(booking)
 
-    # 1) FINAL BookingSeat rows.
+    # -------------------------------------------------------
+    # 1) BookingSeat final seats
+    # -------------------------------------------------------
     seat_rows = (
         db.query(BookingSeat, Booking)
         .join(Booking, Booking.id == BookingSeat.booking_id)
@@ -2362,17 +3018,23 @@ def _service_taken_seats(
             continue
 
         other_keys = _booking_service_candidate_keys(db, other_booking)
-        if not _service_keys_match(current_keys, other_keys):
+        if not other_keys:
             continue
 
-        seat_no = _normalize_ticket_seat_no(getattr(seat_row, "seat_no", None))
+        if not current_keys.intersection(other_keys):
+            continue
+
+        seat_no = str(getattr(seat_row, "seat_no", "") or "").strip()
         if seat_no:
             taken.add(seat_no)
 
-    # 2) TripPassenger rows.
+    # -------------------------------------------------------
+    # 2) TripPassenger effective seats: manual_seat_no / seat_no
+    # -------------------------------------------------------
     passenger_rows: list[TripPassenger] = []
-    resolved_trip_id = getattr(booking, "trip_id", None)
 
+    # Ако текущият booking има trip_id, първо взимаме по trip_id.
+    resolved_trip_id = getattr(booking, "trip_id", None)
     if resolved_trip_id:
         passenger_rows.extend(
             db.query(TripPassenger)
@@ -2380,6 +3042,7 @@ def _service_taken_seats(
             .all()
         )
 
+    # Допълнително взимаме passenger rows, вързани към bookings със същия service.
     linked_rows = (
         db.query(TripPassenger, Booking)
         .join(Booking, Booking.id == TripPassenger.booking_id)
@@ -2387,26 +3050,26 @@ def _service_taken_seats(
     )
 
     seen_passenger_ids: set[int] = {
-        int(getattr(passenger, "id", 0) or 0)
-        for passenger in passenger_rows
-        if getattr(passenger, "id", None)
+        int(getattr(p, "id", 0) or 0)
+        for p in passenger_rows
+        if getattr(p, "id", None)
     }
 
-    for passenger, linked_booking in linked_rows:
-        passenger_id = int(getattr(passenger, "id", 0) or 0)
-        if passenger_id and passenger_id in seen_passenger_ids:
+    for p, b in linked_rows:
+        pid = int(getattr(p, "id", 0) or 0)
+        if pid and pid in seen_passenger_ids:
             continue
 
-        linked_keys = _booking_service_candidate_keys(db, linked_booking)
-        if _service_keys_match(current_keys, linked_keys):
-            passenger_rows.append(passenger)
-            if passenger_id:
-                seen_passenger_ids.add(passenger_id)
+        other_keys = _booking_service_candidate_keys(db, b)
+        if current_keys.intersection(other_keys):
+            passenger_rows.append(p)
+            if pid:
+                seen_passenger_ids.add(pid)
 
     passenger_booking_ids = {
-        int(getattr(passenger, "booking_id"))
-        for passenger in passenger_rows
-        if getattr(passenger, "booking_id", None)
+        int(getattr(p, "booking_id"))
+        for p in passenger_rows
+        if getattr(p, "booking_id", None)
     }
 
     passenger_booking_by_id: dict[int, Booking] = {}
@@ -2416,54 +3079,71 @@ def _service_taken_seats(
             .filter(Booking.id.in_(list(passenger_booking_ids)))
             .all()
         )
-        passenger_booking_by_id = {
-            int(linked_booking.id): linked_booking
-            for linked_booking in passenger_bookings
-        }
+        passenger_booking_by_id = {int(b.id): b for b in passenger_bookings}
 
-    for passenger in passenger_rows:
-        passenger_booking_id = getattr(passenger, "booking_id", None)
+    for p in passenger_rows:
+        p_booking_id = getattr(p, "booking_id", None)
 
         if (
             exclude_booking_id is not None
-            and passenger_booking_id is not None
-            and int(passenger_booking_id) == int(exclude_booking_id)
+            and p_booking_id is not None
+            and int(p_booking_id) == int(exclude_booking_id)
         ):
             continue
 
-        # Unlinked row със същия external_id не трябва да блокира собственото място.
+        # Ако има unlinked TripPassenger със същия external_id като текущия booking,
+        # не го броим като чуждо заето място.
         if exclude_booking_id is not None and current_external_id:
             try:
-                passenger_external_id = _trip_passenger_external_id_key(
-                    passenger,
+                p_external_id = _trip_passenger_external_id_key(
+                    p,
                     booking_by_id=passenger_booking_by_id,
                 )
             except Exception:
-                passenger_external_id = None
+                p_external_id = None
 
-            if (
-                passenger_external_id
-                and str(passenger_external_id).strip() == str(current_external_id).strip()
-            ):
+            if p_external_id and str(p_external_id).strip() == str(current_external_id).strip():
                 continue
 
-        seat_no = _normalize_ticket_seat_no(_effective_trip_passenger_seat(passenger))
+        seat_no = _effective_trip_passenger_seat(p)
+        seat_no = str(seat_no or "").strip()
+
         if seat_no:
             taken.add(seat_no)
 
     return taken
 
-
-
-
 def _ensure_booking_has_service(db_or_booking, booking: Booking | None = None) -> bool:
     """
-    Backward-compatible helper:
+    Backward-compatible helper.
+
+    Поддържа:
       _ensure_booking_has_service(booking)
       _ensure_booking_has_service(db, booking)
-    """
-    return bool(_booking_service_candidate_keys(db_or_booking, booking))
 
+    За portal seat map вече ползва date + route/direction keys,
+    а не само стария _booking_service_key().
+    """
+    if booking is None:
+        db = None
+        booking = db_or_booking
+    else:
+        db = db_or_booking
+
+    if not booking:
+        return False
+
+    keys = _portal_booking_service_keys(db, booking)
+    if keys:
+        return True
+
+    try:
+        return _booking_service_key(db, booking) is not None
+    except Exception:
+        try:
+            return _booking_service_key(booking) is not None
+        except Exception:
+            return False
 
 
 
@@ -2488,94 +3168,778 @@ def _booking_service_label(booking: Booking) -> str:
 
 
 
+def _qr_clean_text(value) -> str | None:
+    """
+    Нормализира QR стойност към текст.
+
+    Работи безопасно и когато JSON payload съдържа:
+      - int
+      - float
+      - str
+      - None
+    """
+    if value is None:
+        return None
+
+    value_str = str(value).strip()
+    return value_str or None
+
+
+
 def _portal_ticket_payload(
     booking: Booking,
-    selected_seat: str,
+    selected_seat: str | None = None,
     passenger: TripPassenger | None = None,
     trip: Trip | None = None,
+    seat_no: str | None = None,
 ) -> dict:
     """
-    QR payload за ЕДИН билет и ЕДНО конкретно място.
-    """
-    selected_seat = _normalize_ticket_seat_no(selected_seat)
+    Генерира payload за QR кода на конкретен билет.
 
-    booking_date = getattr(booking, "booking_date", None)
-    if isinstance(booking_date, datetime):
-        booking_date_iso = booking_date.date().isoformat()
+    Поддържа и двата начина на извикване:
+      _portal_ticket_payload(booking, "50")
+      _portal_ticket_payload(booking=booking, selected_seat="50")
+      _portal_ticket_payload(booking=booking, seat_no="50")
+
+    Това е важно, защото различни части от приложението използват
+    selected_seat или seat_no. И двата варианта вече работят.
+    """
+
+    resolved_seat = str(
+        seat_no
+        or selected_seat
+        or ""
+    ).strip()
+
+    if not resolved_seat:
+        resolved_seat = str(
+            _booking_selected_seat(
+                booking
+            )
+            or ""
+        ).strip()
+
+    booking_date = getattr(
+        booking,
+        "booking_date",
+        None,
+    )
+
+    if isinstance(
+        booking_date,
+        datetime,
+    ):
+        booking_date_iso = (
+            booking_date
+            .date()
+            .isoformat()
+        )
+
     elif booking_date:
         try:
-            booking_date_iso = booking_date.isoformat()
+            booking_date_iso = (
+                booking_date
+                .isoformat()
+            )
         except Exception:
-            booking_date_iso = str(booking_date)
+            booking_date_iso = str(
+                booking_date
+            )
+
     else:
         booking_date_iso = None
 
     trip_date_iso = None
-    if trip and getattr(trip, "date_time", None):
+
+    if (
+        trip
+        and getattr(
+            trip,
+            "date_time",
+            None,
+        )
+    ):
         try:
-            trip_date_iso = trip.date_time.date().isoformat()
+            trip_date_iso = (
+                trip.date_time
+                .date()
+                .isoformat()
+            )
         except Exception:
-            trip_date_iso = str(trip.date_time)
+            trip_date_iso = str(
+                trip.date_time
+            )
 
-    passenger_name = f"{booking.first_name or ''} {booking.last_name or ''}".strip()
-    payment_status = getattr(booking, "payment_status", None)
-    payment_status_norm = str(payment_status or "").strip().lower()
-
-    external_id = str(
-        getattr(booking, "external_id", None)
-        or getattr(booking, "id", "")
-        or ""
+    passenger_name = (
+        f"{getattr(booking, 'first_name', None) or ''} "
+        f"{getattr(booking, 'last_name', None) or ''}"
     ).strip()
 
-    ticket_ref = f"{external_id}-{selected_seat}" if selected_seat else external_id
+    payment_status = getattr(
+        booking,
+        "payment_status",
+        None,
+    )
+
+    payment_status_norm = str(
+        payment_status
+        or ""
+    ).strip().lower()
 
     payload = {
         "type": "boarding_ticket",
-        "version": 2,
-        "ticket_ref": ticket_ref,
+        "version": 1,
 
-        "booking_id": booking.id,
-        "passenger_id": getattr(passenger, "id", None),
-        "trip_id": getattr(booking, "trip_id", None),
-        "external_id": external_id,
+        "booking_id": getattr(
+            booking,
+            "id",
+            None,
+        ),
 
-        "first_name": booking.first_name,
-        "last_name": booking.last_name,
+        "passenger_id": getattr(
+            passenger,
+            "id",
+            None,
+        ),
+
+        "trip_id": (
+            getattr(
+                trip,
+                "id",
+                None,
+            )
+            or getattr(
+                booking,
+                "trip_id",
+                None,
+            )
+        ),
+
+        "external_id": getattr(
+            booking,
+            "external_id",
+            None,
+        ),
+
+        "first_name": getattr(
+            booking,
+            "first_name",
+            None,
+        ),
+
+        "last_name": getattr(
+            booking,
+            "last_name",
+            None,
+        ),
+
         "passenger_name": passenger_name,
 
         "booking_date": booking_date_iso,
         "trip_date": trip_date_iso,
 
-        "route_from": booking.route_from,
-        "route_to": booking.route_to,
-        "direction": f"{booking.route_from or '-'} -> {booking.route_to or '-'}",
+        "route_from": getattr(
+            booking,
+            "route_from",
+            None,
+        ),
 
-        "bus_from": booking.bus_from,
-        "bus_to": booking.bus_to,
-        "seat_no": selected_seat,
+        "route_to": getattr(
+            booking,
+            "route_to",
+            None,
+        ),
 
-        "payment_method": _norm_payment_method(getattr(booking, "payment_method", None)),
-        "total": str(getattr(booking, "total", None) or ""),
-        "currency": str(getattr(booking, "currency", None) or "EUR").upper(),
-        "paid": payment_status_norm in {"paid", "approved", "payment_approved"},
+        "direction": (
+            f"{getattr(booking, 'route_from', None) or '-'} "
+            f"-> "
+            f"{getattr(booking, 'route_to', None) or '-'}"
+        ),
+
+        "bus_from": getattr(
+            booking,
+            "bus_from",
+            None,
+        ),
+
+        "bus_to": getattr(
+            booking,
+            "bus_to",
+            None,
+        ),
+
+        "seat_no": resolved_seat or None,
+
+        "paid": payment_status_norm in {
+            "paid",
+            "approved",
+            "payment_approved",
+        },
+
         "payment_status": payment_status,
-        "booking_status": getattr(booking, "booking_status", None),
+
+        "booking_status": getattr(
+            booking,
+            "booking_status",
+            None,
+        ),
     }
 
-    payload["sig"] = _sign_ticket_payload(payload)
+    payload["sig"] = _sign_ticket_payload(
+        payload
+    )
+
     return payload
 
 
+def _portal_ticket_payload_text(
+    booking: Booking,
+    selected_seat: str | None = None,
+    passenger: TripPassenger | None = None,
+    trip: Trip | None = None,
+    seat_no: str | None = None,
+) -> str:
+    """
+    Връща QR payload като JSON текст.
 
+    Използва се от PDF билета и може да се използва и от SVG route-а.
+    Поддържа selected_seat и seat_no за backward compatibility.
+    """
 
-def _ticket_passengers_for_booking(db: Session, booking: Booking) -> list[TripPassenger]:
-    passengers = (
-        db.query(TripPassenger)
-        .filter(TripPassenger.booking_id == booking.id)
-        .order_by(TripPassenger.id.asc())
-        .all()
+    payload = _portal_ticket_payload(
+        booking=booking,
+        selected_seat=selected_seat,
+        passenger=passenger,
+        trip=trip,
+        seat_no=seat_no,
     )
-    return sorted(passengers, key=_trip_passenger_sort_key)
+
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+def _portal_ticket_payload_text(
+    booking: Booking,
+    seat_no: str,
+) -> str:
+    payload = _portal_ticket_payload(
+        booking,
+        seat_no,
+    )
+
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _portal_qr_drawing(
+    payload_text: str,
+    size: float = 42 * mm,
+) -> Drawing:
+    """
+    Създава QR drawing, който може да се използва:
+      - като SVG за HTML страницата;
+      - в PDF билета.
+    """
+    qr_widget = QrCodeWidget(
+        payload_text
+    )
+
+    x1, y1, x2, y2 = qr_widget.getBounds()
+
+    qr_width = max(
+        x2 - x1,
+        1,
+    )
+
+    qr_height = max(
+        y2 - y1,
+        1,
+    )
+
+    drawing = Drawing(
+        size,
+        size,
+        transform=[
+            size / qr_width,
+            0,
+            0,
+            size / qr_height,
+            0,
+            0,
+        ],
+    )
+
+    drawing.add(
+        qr_widget
+    )
+
+    return drawing
+
+
+def _portal_qr_svg_bytes(
+    payload_text: str,
+) -> bytes:
+    drawing = _portal_qr_drawing(
+        payload_text,
+        size=180,
+    )
+
+    svg_data = renderSVG.drawToString(
+        drawing
+    )
+
+    if isinstance(
+        svg_data,
+        bytes,
+    ):
+        return svg_data
+
+    return str(
+        svg_data
+    ).encode(
+        "utf-8"
+    )
+
+
+def _ticket_decimal(value) -> Decimal | None:
+    """
+    Безопасно преобразува стойност към Decimal за визуализация на цени.
+    """
+    if value in (None, ""):
+        return None
+
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _ticket_positive_qty(value) -> int:
+    try:
+        qty = int(value or 0)
+    except Exception:
+        qty = 0
+
+    return qty if qty > 0 else 1
+
+
+def _ticket_money_text(value, currency: str | None) -> str:
+    amount = _ticket_decimal(value)
+    if amount is None:
+        return ""
+
+    currency_text = str(currency or "").strip().upper()
+    return f"{amount:.2f} {currency_text}".strip()
+
+
+def _ticket_booking_total_text(booking: Booking) -> str:
+    return _ticket_money_text(
+        getattr(booking, "total", None),
+        getattr(booking, "currency", None),
+    )
+
+
+def _ticket_line_unit_text(line: BookingTicketLine, qty: int) -> str:
+    """
+    Връща цената за ЕДИН билет от конкретен BookingTicketLine.
+
+    Ако редът съдържа обща стойност за qty > 1, тя се разделя
+    на броя билети. Така всеки отделен билет получава собствена цена.
+    """
+    qty_decimal = Decimal(str(max(int(qty or 1), 1)))
+
+    line_total_uah = _ticket_decimal(
+        getattr(line, "line_total_uah", None)
+    )
+    line_total_eur = _ticket_decimal(
+        getattr(line, "line_total_eur", None)
+    )
+
+    dual_parts: list[str] = []
+
+    if line_total_uah is not None:
+        dual_parts.append(
+            _ticket_money_text(
+                line_total_uah / qty_decimal,
+                "UAH",
+            )
+        )
+
+    if line_total_eur is not None:
+        dual_parts.append(
+            _ticket_money_text(
+                line_total_eur / qty_decimal,
+                "EUR",
+            )
+        )
+
+    if dual_parts:
+        return " / ".join(part for part in dual_parts if part)
+
+    line_total = _ticket_decimal(
+        getattr(line, "line_total", None)
+    )
+
+    if line_total is not None:
+        return _ticket_money_text(
+            line_total / qty_decimal,
+            getattr(line, "currency", None),
+        )
+
+    # Backward-compatible fallback, ако importer-ът пази unit price отделно.
+    for attr_name in (
+        "unit_price",
+        "price",
+        "amount",
+    ):
+        unit_value = _ticket_decimal(
+            getattr(line, attr_name, None)
+        )
+
+        if unit_value is not None:
+            return _ticket_money_text(
+                unit_value,
+                getattr(line, "currency", None),
+            )
+
+    return ""
+
+
+def _portal_ticket_price_units(
+    ticket_lines: list[BookingTicketLine] | None,
+) -> list[dict]:
+    """
+    Разгръща ценовите редове до отделни единични билети.
+
+    Пример:
+      child, qty=1, line_total=70 EUR
+      adult, qty=1, line_total=100 EUR
+
+    става:
+      [
+        {ticket_type: child, ticket_price_text: 70.00 EUR},
+        {ticket_type: adult, ticket_price_text: 100.00 EUR},
+      ]
+
+    Няма директна връзка seat -> ticket line в базата. Затова единичните
+    цени се свързват последователно със сортираните места. Порядъкът не
+    променя общата стойност и не участва в QR payload-а.
+    """
+    units: list[dict] = []
+
+    for line in list(ticket_lines or []):
+        qty = _ticket_positive_qty(
+            getattr(line, "qty", None)
+        )
+
+        ticket_type = str(
+            getattr(line, "ticket_type_raw", None)
+            or getattr(line, "ticket_type", None)
+            or ""
+        ).strip()
+
+        unit_price_text = _ticket_line_unit_text(
+            line,
+            qty,
+        )
+
+        for _ in range(qty):
+            units.append({
+                "ticket_type": ticket_type,
+                "ticket_price_text": unit_price_text,
+            })
+
+    return units
+
+
+def _ticket_decimal_or_none(value) -> Decimal | None:
+    if value in (None, ""):
+        return None
+
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _ticket_qty_int(value) -> int:
+    try:
+        qty = int(value or 0)
+    except Exception:
+        qty = 0
+
+    return max(qty, 0)
+
+
+def _ticket_money_text(
+    amount,
+    currency: str | None,
+) -> str | None:
+    parsed_amount = _ticket_decimal_or_none(amount)
+
+    if parsed_amount is None:
+        return None
+
+    currency_text = str(currency or "").strip().upper()
+
+    if not currency_text:
+        currency_text = "EUR"
+
+    return f"{parsed_amount:.2f} {currency_text}"
+
+
+def _ticket_line_unit_price_text(
+    line: BookingTicketLine,
+) -> str | None:
+    """
+    Връща цената за ЕДИН билет от даден BookingTicketLine.
+
+    Пример:
+      qty = 2
+      line_total = 140 EUR
+
+    Резултат:
+      70.00 EUR за всеки от двата билета.
+    """
+    qty = _ticket_qty_int(
+        getattr(
+            line,
+            "qty",
+            None,
+        )
+    )
+
+    if qty <= 0:
+        qty = 1
+
+    currency = str(
+        getattr(
+            line,
+            "currency",
+            None,
+        )
+        or "EUR"
+    ).strip().upper()
+
+    # Стандартен вариант: една валута.
+    line_total = _ticket_decimal_or_none(
+        getattr(
+            line,
+            "line_total",
+            None,
+        )
+    )
+
+    if line_total is not None:
+        unit_price = (
+            line_total /
+            Decimal(qty)
+        ).quantize(
+            Decimal("0.01")
+        )
+
+        return _ticket_money_text(
+            unit_price,
+            currency,
+        )
+
+    # Fallback: EUR стойност при dual-currency ред.
+    line_total_eur = _ticket_decimal_or_none(
+        getattr(
+            line,
+            "line_total_eur",
+            None,
+        )
+    )
+
+    if line_total_eur is not None:
+        unit_price_eur = (
+            line_total_eur /
+            Decimal(qty)
+        ).quantize(
+            Decimal("0.01")
+        )
+
+        return _ticket_money_text(
+            unit_price_eur,
+            "EUR",
+        )
+
+    # Fallback: UAH стойност, когато няма EUR.
+    line_total_uah = _ticket_decimal_or_none(
+        getattr(
+            line,
+            "line_total_uah",
+            None,
+        )
+    )
+
+    if line_total_uah is not None:
+        unit_price_uah = (
+            line_total_uah /
+            Decimal(qty)
+        ).quantize(
+            Decimal("0.01")
+        )
+
+        return _ticket_money_text(
+            unit_price_uah,
+            "UAH",
+        )
+
+    # Допълнителни fallback полета, ако моделът ги има.
+    for attr_name in (
+        "unit_price",
+        "price",
+        "amount",
+    ):
+        raw_value = getattr(
+            line,
+            attr_name,
+            None,
+        )
+
+        formatted = _ticket_money_text(
+            raw_value,
+            currency,
+        )
+
+        if formatted:
+            return formatted
+
+    return None
+
+
+def _expanded_ticket_line_prices(
+    ticket_lines: list[BookingTicketLine],
+) -> list[str | None]:
+    """
+    Разгъва ticket lines до цена за всяко отделно място.
+
+    Пример:
+      дете qty=1, total=70 EUR
+      възрастен qty=1, total=100 EUR
+
+    Резултат:
+      ["70.00 EUR", "100.00 EUR"]
+    """
+    expanded_prices: list[str | None] = []
+
+    for line in ticket_lines or []:
+        qty = _ticket_qty_int(
+            getattr(
+                line,
+                "qty",
+                None,
+            )
+        )
+
+        if qty <= 0:
+            qty = 1
+
+        unit_price_text = _ticket_line_unit_price_text(
+            line
+        )
+
+        for _ in range(qty):
+            expanded_prices.append(
+                unit_price_text
+            )
+
+    return expanded_prices
+
+
+def _normalize_ticket_seat_no(value) -> str | None:
+    """
+    Нормализира номер на място.
+
+    Примери:
+      50       -> "50"
+      "50"     -> "50"
+      "50.0"   -> "50"
+      ""       -> None
+    """
+    if value is None:
+        return None
+
+    seat_no = str(value).strip()
+    if not seat_no:
+        return None
+
+    if re.fullmatch(r"\d+\.0+", seat_no):
+        seat_no = seat_no.split(".", 1)[0]
+
+    return seat_no or None
+
+
+def _resolve_requested_ticket_seat(
+    booking: Booking,
+    seat_no: str | None = None,
+) -> str | None:
+    """
+    Определя за кое място трябва да бъде показан билетът.
+
+    - Ако URL съдържа ?seat_no=50, връща 50 само ако мястото
+      действително принадлежи на booking-а.
+    - Ако параметър липсва, връща първото място за backward compatibility.
+    """
+    selected_seats = [
+        normalized
+        for normalized in (
+            _normalize_ticket_seat_no(item)
+            for item in _booking_selected_seats(booking)
+        )
+        if normalized
+    ]
+
+    requested_seat = _normalize_ticket_seat_no(
+        seat_no
+    )
+
+    if requested_seat:
+        if requested_seat in selected_seats:
+            return requested_seat
+
+        return None
+
+    return (
+        selected_seats[0]
+        if selected_seats
+        else None
+    )
+
+
+def _ticket_passenger_effective_seat(
+    passenger: TripPassenger,
+) -> str | None:
+    """
+    Връща актуалното място на TripPassenger.
+
+    manual_seat_no е с приоритет, защото съдържа промени,
+    направени от администратора.
+    """
+    return _normalize_ticket_seat_no(
+        getattr(
+            passenger,
+            "manual_seat_no",
+            None,
+        )
+        or getattr(
+            passenger,
+            "seat_no",
+            None,
+        )
+        or getattr(
+            passenger,
+            "effective_seat_no",
+            None,
+        )
+    )
 
 
 def _find_ticket_passenger_for_seat(
@@ -2584,76 +3948,349 @@ def _find_ticket_passenger_for_seat(
     seat_no: str,
 ) -> TripPassenger | None:
     """
-    Намира passenger row за конкретното място.
+    Намира правилния TripPassenger ред за конкретното място.
 
-    Ако sync-ът още не е записал мястото в TripPassenger, използва стабилно
-    съпоставяне по index между FINAL BookingSeat и passenger rows.
+    Това е важно при booking с повече от един билет:
+      Място 50 -> отделен билет и QR
+      Място 51 -> отделен билет и QR
+
+    Приоритет:
+      1) linked TripPassenger по booking_id + точно съвпадение на място
+      2) linked TripPassenger по стабилен индекс
+      3) fallback по trip_id + external_id + точно място
+      4) fallback по стабилен индекс
+      5) единствен passenger row, ако няма двусмислие
     """
-    normalized_seat = _normalize_ticket_seat_no(seat_no)
-    passengers = _ticket_passengers_for_booking(db, booking)
-    if not passengers:
+    normalized_seat = _normalize_ticket_seat_no(
+        seat_no
+    )
+
+    if not normalized_seat:
         return None
 
-    for passenger in passengers:
-        passenger_seat = _normalize_ticket_seat_no(_effective_passenger_seat(passenger))
-        if passenger_seat and passenger_seat == normalized_seat:
+    selected_seats = [
+        normalized
+        for normalized in (
+            _normalize_ticket_seat_no(item)
+            for item in _booking_selected_seats(booking)
+        )
+        if normalized
+    ]
+
+    try:
+        seat_index = selected_seats.index(
+            normalized_seat
+        )
+    except ValueError:
+        seat_index = None
+
+    # -------------------------------------------------------
+    # 1) Основен вариант: TripPassenger вече е linked към booking_id
+    # -------------------------------------------------------
+    linked_passengers = (
+        db.query(TripPassenger)
+        .filter(
+            TripPassenger.booking_id == booking.id
+        )
+        .order_by(
+            TripPassenger.id.asc()
+        )
+        .all()
+    )
+
+    try:
+        linked_passengers = sorted(
+            linked_passengers,
+            key=_trip_passenger_sort_key,
+        )
+    except Exception:
+        linked_passengers = sorted(
+            linked_passengers,
+            key=lambda item: int(
+                getattr(
+                    item,
+                    "id",
+                    0,
+                )
+                or 0
+            ),
+        )
+
+    for passenger in linked_passengers:
+        if (
+            _ticket_passenger_effective_seat(
+                passenger
+            )
+            == normalized_seat
+        ):
             return passenger
 
-    selected_seats = _booking_selected_seats(booking)
+    # Ако seat sync още не е нанесен върху TripPassenger,
+    # използваме стабилното съответствие по индекс.
+    if (
+        seat_index is not None
+        and seat_index < len(linked_passengers)
+    ):
+        return linked_passengers[
+            seat_index
+        ]
+
+    # -------------------------------------------------------
+    # 2) Fallback: booking_id още липсва, но TripPassenger
+    #    може да бъде открит по trip_id + external_id
+    # -------------------------------------------------------
+    resolved_trip_id = getattr(
+        booking,
+        "trip_id",
+        None,
+    )
+
+    if not resolved_trip_id:
+        try:
+            resolved_trip_id = _resolve_booking_trip_id(
+                db,
+                booking,
+            )
+        except Exception:
+            resolved_trip_id = None
+
+    external_id_key = _booking_external_id_key(
+        booking
+    )
+
+    fallback_passengers: list[TripPassenger] = []
+
+    if (
+        resolved_trip_id
+        and external_id_key
+    ):
+        trip_passengers = (
+            db.query(TripPassenger)
+            .filter(
+                TripPassenger.trip_id == resolved_trip_id
+            )
+            .order_by(
+                TripPassenger.id.asc()
+            )
+            .all()
+        )
+
+        booking_by_id = {
+            int(booking.id): booking
+        }
+
+        for passenger in trip_passengers:
+            try:
+                passenger_external_id = (
+                    _trip_passenger_external_id_key(
+                        passenger,
+                        booking_by_id=booking_by_id,
+                    )
+                )
+            except Exception:
+                passenger_external_id = None
+
+            if (
+                passenger_external_id
+                and str(
+                    passenger_external_id
+                ).strip()
+                == str(
+                    external_id_key
+                ).strip()
+            ):
+                fallback_passengers.append(
+                    passenger
+                )
+
     try:
-        seat_index = selected_seats.index(normalized_seat)
-    except ValueError:
-        seat_index = -1
+        fallback_passengers = sorted(
+            fallback_passengers,
+            key=_trip_passenger_sort_key,
+        )
+    except Exception:
+        fallback_passengers = sorted(
+            fallback_passengers,
+            key=lambda item: int(
+                getattr(
+                    item,
+                    "id",
+                    0,
+                )
+                or 0
+            ),
+        )
 
-    if 0 <= seat_index < len(passengers):
-        return passengers[seat_index]
+    for passenger in fallback_passengers:
+        if (
+            _ticket_passenger_effective_seat(
+                passenger
+            )
+            == normalized_seat
+        ):
+            return passenger
 
-    return passengers[0] if len(passengers) == 1 else None
+    if (
+        seat_index is not None
+        and seat_index < len(fallback_passengers)
+    ):
+        return fallback_passengers[
+            seat_index
+        ]
+
+    # -------------------------------------------------------
+    # 3) Безопасен последен fallback само при един ред
+    # -------------------------------------------------------
+    if len(linked_passengers) == 1:
+        return linked_passengers[0]
+
+    if len(fallback_passengers) == 1:
+        return fallback_passengers[0]
+
+    return None
 
 
-def _resolve_requested_ticket_seat(
+def _portal_ticket_payload_text(
     booking: Booking,
-    requested_seat_no: str | None,
-) -> str | None:
+    selected_seat: str,
+    passenger: TripPassenger | None = None,
+    trip: Trip | None = None,
+) -> str:
     """
-    Валидира seat_no от URL. При липсващ seat_no запазва старото поведение
-    и връща първото място.
+    Генерира JSON текста за QR кода.
+
+    Цената на индивидуалния билет умишлено НЕ се добавя към QR payload-а.
+    Тя остава само информативна част от HTML/PDF билета.
     """
-    selected_seats = _booking_selected_seats(booking)
-    if not selected_seats:
-        return None
+    payload = _portal_ticket_payload(
+        booking=booking,
+        selected_seat=selected_seat,
+        passenger=passenger,
+        trip=trip,
+    )
 
-    requested = _normalize_ticket_seat_no(requested_seat_no)
-    if not requested:
-        return selected_seats[0]
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
-    return requested if requested in selected_seats else None
-
-
-def _portal_ticket_items(db: Session, booking: Booking) -> list[dict]:
+def _portal_ticket_items(
+    db: Session,
+    booking: Booking,
+    ticket_lines: list[BookingTicketLine] | None = None,
+) -> list[dict]:
     """
-    Подготвя отделен ticket item за всяко FINAL място.
+    Подготвя отделен билет за всяко FINAL място.
+
+    QR payload-ът не се усложнява:
+    - всеки билет продължава да има собствен seat_no;
+    - цената е само информативна част от HTML/PDF билета;
+    - цената не се добавя към QR payload-а.
     """
+    if ticket_lines is None:
+        ticket_lines = (
+            db.query(BookingTicketLine)
+            .filter(
+                BookingTicketLine.booking_id == booking.id
+            )
+            .order_by(
+                BookingTicketLine.id.asc()
+            )
+            .all()
+        )
+
+    selected_seats = _booking_selected_seats(
+        booking
+    )
+
+    expanded_prices = _expanded_ticket_line_prices(
+        ticket_lines
+    )
+
+    booking_total_text = _ticket_money_text(
+        getattr(
+            booking,
+            "total",
+            None,
+        ),
+        getattr(
+            booking,
+            "currency",
+            None,
+        ),
+    )
+
     items: list[dict] = []
 
-    for seat_no in _booking_selected_seats(booking):
-        normalized_seat = _normalize_ticket_seat_no(seat_no)
-        passenger = _find_ticket_passenger_for_seat(db, booking, normalized_seat)
+    for index, seat_no in enumerate(
+        selected_seats
+    ):
+        normalized_seat = _normalize_ticket_seat_no(
+            seat_no
+        )
+
+        if not normalized_seat:
+            continue
+
+        passenger = _find_ticket_passenger_for_seat(
+            db,
+            booking,
+            normalized_seat,
+        )
+
         payload = _portal_ticket_payload(
             booking=booking,
             selected_seat=normalized_seat,
             passenger=passenger,
             trip=None,
         )
-        encoded_seat = quote(normalized_seat)
 
-        items.append({
-            "seat_no": normalized_seat,
-            "ticket_ref": payload.get("ticket_ref"),
-            "qr_url": f"/portal/ticket/qr?seat_no={encoded_seat}",
-            "qr_download_url": f"/portal/ticket/qr/download?seat_no={encoded_seat}",
-            "pdf_url": f"/portal/ticket/pdf?seat_no={encoded_seat}",
-        })
+        encoded_seat = quote(
+            normalized_seat
+        )
+
+        ticket_price_text = (
+            expanded_prices[index]
+            if index < len(expanded_prices)
+            else None
+        )
+
+        # При booking само с едно място може безопасно да се използва total.
+        if (
+            not ticket_price_text
+            and len(selected_seats) == 1
+        ):
+            ticket_price_text = booking_total_text
+
+        items.append(
+            {
+                "seat_no": normalized_seat,
+                "ticket_ref": payload.get(
+                    "ticket_ref"
+                ),
+                "ticket_price_text": (
+                    ticket_price_text
+                    or "—"
+                ),
+                "booking_total_text": (
+                    booking_total_text
+                    or "—"
+                ),
+                "qr_url": (
+                    "/portal/ticket/qr"
+                    f"?seat_no={encoded_seat}"
+                ),
+                "qr_download_url": (
+                    "/portal/ticket/qr/download"
+                    f"?seat_no={encoded_seat}"
+                ),
+                "pdf_url": (
+                    "/portal/ticket/pdf"
+                    f"?seat_no={encoded_seat}"
+                ),
+            }
+        )
 
     return items
 
@@ -2853,23 +4490,17 @@ def _ticket_qr_available(booking: Booking) -> bool:
     return getattr(booking, "payment_status", None) == "paid"
 
 
-
-def _qr_clean_text(value) -> str | None:
-    """Безопасно нормализира стойност от QR payload към текст."""
-    if value is None:
-        return None
-    value_text = str(value).strip()
-    return value_text or None
-
-
 def _parse_ticket_payload(raw: str) -> dict | None:
     """
     Парсва JSON payload от QR билет.
 
-    Подписът се проверява върху оригиналния JSON dict ПРЕДИ нормализиране.
-    Това пази съвместимост и със стари QR кодове, при които external_id е число.
+    ВАЖНО:
+    1) Signature verification се прави върху оригиналния JSON dict.
+    2) Едва след това стойностите се нормализират.
+    3) Работи и със стари QR кодове, при които external_id е число.
     """
     raw = (raw or "").strip()
+
     if not raw:
         return None
 
@@ -2885,34 +4516,43 @@ def _parse_ticket_payload(raw: str) -> dict | None:
         return None
 
     def _as_int(value):
-        if value in (None, ""):
+        if value is None or value == "":
             return None
+
         try:
             return int(value)
         except Exception:
             return None
 
+    # -------------------------------------------------------
+    # Проверяваме подписа ПРЕДИ да променяме типовете.
+    # Това е критично за старите QR кодове, при които
+    # external_id може да е JSON number, а не string.
+    # -------------------------------------------------------
     signature_verified = False
     signature = _qr_clean_text(original_data.get("sig"))
 
     if signature:
         if not _verify_ticket_payload_signature(original_data):
             return None
+
         signature_verified = True
 
     payload = {
         "type": "boarding_ticket",
         "version": _as_int(original_data.get("version")) or 1,
-        "ticket_ref": _qr_clean_text(original_data.get("ticket_ref")),
 
         "booking_id": _as_int(original_data.get("booking_id")),
         "passenger_id": _as_int(original_data.get("passenger_id")),
         "trip_id": _as_int(original_data.get("trip_id")),
+
         "external_id": _qr_clean_text(original_data.get("external_id")),
 
         "first_name": _qr_clean_text(original_data.get("first_name")),
         "last_name": _qr_clean_text(original_data.get("last_name")),
-        "passenger_name": _qr_clean_text(original_data.get("passenger_name")),
+        "passenger_name": _qr_clean_text(
+            original_data.get("passenger_name")
+        ),
 
         "booking_date": _qr_clean_text(original_data.get("booking_date")),
         "trip_date": _qr_clean_text(original_data.get("trip_date")),
@@ -2920,47 +4560,92 @@ def _parse_ticket_payload(raw: str) -> dict | None:
         "route_from": _qr_clean_text(original_data.get("route_from")),
         "route_to": _qr_clean_text(original_data.get("route_to")),
         "direction": _qr_clean_text(original_data.get("direction")),
+
         "bus_from": _qr_clean_text(original_data.get("bus_from")),
         "bus_to": _qr_clean_text(original_data.get("bus_to")),
 
-        "seat_no": _normalize_ticket_seat_no(original_data.get("seat_no")) or None,
+        "seat_no": _qr_clean_text(original_data.get("seat_no")),
+
         "payment_method": _qr_clean_text(original_data.get("payment_method")),
+
         "total": _qr_clean_text(original_data.get("total")),
+
         "currency": (_qr_clean_text(original_data.get("currency")) or "EUR").upper(),
+
         "paid": bool(original_data.get("paid", False)),
-        "payment_status": _qr_clean_text(original_data.get("payment_status")),
-        "booking_status": _qr_clean_text(original_data.get("booking_status")),
+
+        "paid": bool(original_data.get("paid", False)),
+
+        "payment_status": _qr_clean_text(
+            original_data.get("payment_status")
+        ),
+
+        "booking_status": _qr_clean_text(
+            original_data.get("booking_status")
+        ),
 
         "sig": signature,
+
+        # Използва се от resolver-а, за да не проверява повторно
+        # подписа върху вече нормализирани стойности.
         "_signature_verified": signature_verified,
     }
 
+    # Минимална валидност:
+    # трябва да има booking_id или external_id.
     if not payload["booking_id"] and not payload["external_id"]:
         return None
 
     return payload
 
 
-
-
-def _check_in_by_ticket_payload(
-    db: Session,
-    payload: dict,
-) -> tuple[bool, str, Booking | None, list[TripPassenger]]:
+def _check_in_by_ticket_payload(db: Session, payload: dict) -> tuple[bool, str, Booking | None, list[TripPassenger]]:
     """
-    Backward-compatible check-in helper. Маркира само конкретния QR билет,
-    а не всички пътници от резервацията.
+    Check-in по QR payload.
+
+    Валидира:
+      - booking_id
+      - external_id
+      - seat_no
+
+    Маркира linked TripPassenger rows като checked_in=True.
     """
-    booking, passenger = _resolve_trip_passenger_by_ticket_payload(db, payload)
+    booking_id = payload.get("booking_id")
+    external_id = payload.get("external_id")
+    seat_no = (payload.get("seat_no") or "").strip()
+
+    if not booking_id:
+        return False, "Missing booking_id", None, []
+
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
     if not booking:
         return False, "Booking not found", None, []
-    if not passenger:
-        return False, "Passenger not found", booking, []
 
-    passenger.checked_in = True
+    if external_id is not None and booking.external_id != external_id:
+        return False, "External ID mismatch", booking, []
+
+    selected_seat = _booking_selected_seat(booking)
+    if not selected_seat:
+        return False, "Booking has no final seat", booking, []
+
+    if seat_no and selected_seat != seat_no:
+        return False, "Seat mismatch", booking, []
+
+    passengers = (
+        db.query(TripPassenger)
+        .filter(TripPassenger.booking_id == booking.id)
+        .order_by(TripPassenger.id.asc())
+        .all()
+    )
+
+    if not passengers:
+        return False, "No linked passengers for booking", booking, []
+
+    for p in passengers:
+        p.checked_in = True
+
     db.flush()
-    return True, "Passenger checked in successfully", booking, [passenger]
-
+    return True, "Passenger checked in successfully", booking, passengers
 
 def _ensure_pdf_unicode_fonts() -> tuple[str, str]:
     """
@@ -3195,30 +4880,47 @@ def _upsert_driver_boarding_state(
 
 
 
-
 def _resolve_trip_passenger_by_ticket_payload(
     db: Session,
     payload: dict,
 ) -> tuple[Booking | None, TripPassenger | None]:
     """
-    Намира booking и конкретния TripPassenger row за QR билета.
+    Намира booking и TripPassenger row по вече парснат QR payload.
+
+    Signature verification се прави в _parse_ticket_payload().
+    Тук НЕ подписваме повторно нормализирания payload, защото
+    старите QR кодове може да съдържат external_id като число.
     """
     if not payload:
         return None, None
 
+    # Ако QR има подпис, parser-ът трябва вече да го е потвърдил.
     if payload.get("sig") and not payload.get("_signature_verified"):
         return None, None
 
     booking_id = payload.get("booking_id")
     passenger_id = payload.get("passenger_id")
     trip_id = payload.get("trip_id")
+
     external_id = _qr_clean_text(payload.get("external_id"))
-    seat_no = _normalize_ticket_seat_no(payload.get("seat_no"))
+    seat_no = _qr_clean_text(payload.get("seat_no")) or ""
 
     booking = None
-    if booking_id:
-        booking = db.query(Booking).filter(Booking.id == int(booking_id)).first()
 
+    # -------------------------------------------------------
+    # 1) Booking ID е най-силният match
+    # -------------------------------------------------------
+    if booking_id:
+        booking = (
+            db.query(Booking)
+            .filter(Booking.id == int(booking_id))
+            .first()
+        )
+
+    # -------------------------------------------------------
+    # 2) Fallback по external_id
+    # Работи независимо дали DB колоната е integer или string.
+    # -------------------------------------------------------
     if not booking and external_id:
         booking = (
             db.query(Booking)
@@ -3229,64 +4931,107 @@ def _resolve_trip_passenger_by_ticket_payload(
     if not booking:
         return None, None
 
-    booking_external_id = _qr_clean_text(getattr(booking, "external_id", None))
+    # -------------------------------------------------------
+    # Допълнителна защита:
+    # ако QR съдържа external_id и booking е намерен по booking_id,
+    # проверяваме дали стойностите съвпадат.
+    # -------------------------------------------------------
+    booking_external_id = _qr_clean_text(
+        getattr(booking, "external_id", None)
+    )
+
     if external_id and booking_external_id != external_id:
         return None, None
 
+    # -------------------------------------------------------
+    # 3) Най-силен passenger match: passenger_id
+    # -------------------------------------------------------
     if passenger_id:
-        passenger = db.query(TripPassenger).filter(TripPassenger.id == int(passenger_id)).first()
+        passenger = (
+            db.query(TripPassenger)
+            .filter(TripPassenger.id == int(passenger_id))
+            .first()
+        )
+
         if passenger:
             passenger_booking_id = getattr(passenger, "booking_id", None)
             passenger_trip_id = getattr(passenger, "trip_id", None)
 
-            if passenger_booking_id is not None and int(passenger_booking_id) != int(booking.id):
+            if (
+                passenger_booking_id is not None
+                and int(passenger_booking_id) != int(booking.id)
+            ):
                 return booking, None
 
-            if trip_id is not None and passenger_trip_id is not None and int(passenger_trip_id) != int(trip_id):
+            if (
+                trip_id is not None
+                and passenger_trip_id is not None
+                and int(passenger_trip_id) != int(trip_id)
+            ):
                 return booking, None
 
             return booking, passenger
 
-    passengers = _ticket_passengers_for_booking(db, booking)
+    # -------------------------------------------------------
+    # 4) Passenger rows по booking_id
+    # -------------------------------------------------------
+    passengers = (
+        db.query(TripPassenger)
+        .filter(TripPassenger.booking_id == booking.id)
+        .order_by(TripPassenger.id.asc())
+        .all()
+    )
 
+    # -------------------------------------------------------
+    # 5) Fallback: external_id в същия trip
+    # -------------------------------------------------------
     if not passengers and getattr(booking, "trip_id", None):
         ext_key = _booking_external_id_key(booking)
+
         if ext_key:
             candidates = (
                 db.query(TripPassenger)
                 .filter(TripPassenger.trip_id == booking.trip_id)
                 .all()
             )
+
+            matched: list[TripPassenger] = []
             booking_by_id = {int(booking.id): booking}
+
+            for candidate in candidates:
+                candidate_external_id = _trip_passenger_external_id_key(
+                    candidate,
+                    booking_by_id=booking_by_id,
+                )
+
+                if (
+                    candidate_external_id
+                    and str(candidate_external_id).strip()
+                    == str(ext_key).strip()
+                ):
+                    matched.append(candidate)
+
             passengers = sorted(
-                [
-                    candidate
-                    for candidate in candidates
-                    if _trip_passenger_external_id_key(candidate, booking_by_id=booking_by_id) == ext_key
-                ],
+                matched,
                 key=_trip_passenger_sort_key,
             )
 
     if not passengers:
         return booking, None
 
+    # -------------------------------------------------------
+    # 6) Seat match
+    # -------------------------------------------------------
     if seat_no:
         for passenger in passengers:
-            if _normalize_ticket_seat_no(_effective_passenger_seat(passenger)) == seat_no:
+            passenger_seat = _effective_passenger_seat(passenger)
+
+            if str(passenger_seat or "").strip() == seat_no:
                 return booking, passenger
 
-        # Stable fallback by FINAL-seat index when TripPassenger seat sync lags behind.
-        selected_seats = _booking_selected_seats(booking)
-        try:
-            seat_index = selected_seats.index(seat_no)
-        except ValueError:
-            seat_index = -1
-
-        if 0 <= seat_index < len(passengers):
-            return booking, passengers[seat_index]
-
-        return booking, None
-
+    # -------------------------------------------------------
+    # 7) Fallback: първият passenger row
+    # -------------------------------------------------------
     return booking, passengers[0]
 
 
@@ -3573,7 +5318,6 @@ def _booking_final_seats_map_for_trip(db: Session, trip_id: int) -> dict[int, li
     return out
 
 
-
 def _build_trip_portal_overlay(
     db: Session,
     trip_id: int,
@@ -3587,104 +5331,198 @@ def _build_trip_portal_overlay(
       - дали online плащането е потвърдено
       - payment method
       - дали резервацията е CASH
-      - сумата и валутата на booking-а
+      - общата сума и валутата на booking-а
+
+    Работи и когато TripPassenger.booking_id липсва,
+    ако Unique ID може да бъде намерен в passenger row.
     """
     overlay: dict[int, dict] = {}
+
     if not passengers:
         return overlay
 
+    # -------------------------------------------------------
+    # 1) Директно свързани bookings чрез booking_id
+    # -------------------------------------------------------
     direct_booking_ids = sorted({
-        int(passenger.booking_id)
-        for passenger in passengers
-        if getattr(passenger, "booking_id", None)
+        int(p.booking_id)
+        for p in passengers
+        if getattr(p, "booking_id", None)
     })
 
     booking_by_id: dict[int, Booking] = {}
-    if direct_booking_ids:
-        direct_bookings = db.query(Booking).filter(Booking.id.in_(direct_booking_ids)).all()
-        booking_by_id = {int(booking.id): booking for booking in direct_bookings}
 
+    if direct_booking_ids:
+        direct_bookings = (
+            db.query(Booking)
+            .filter(Booking.id.in_(direct_booking_ids))
+            .all()
+        )
+
+        booking_by_id = {
+            int(booking.id): booking
+            for booking in direct_bookings
+        }
+
+    # -------------------------------------------------------
+    # 2) Опит за връзка чрез external_id
+    # -------------------------------------------------------
     passenger_external_id_map: dict[int, str] = {}
     external_ids: set[str] = set()
 
     for passenger in passengers:
-        external_id = _trip_passenger_external_id_key(passenger, booking_by_id=booking_by_id)
+        external_id = _trip_passenger_external_id_key(
+            passenger,
+            booking_by_id=booking_by_id,
+        )
+
         if not external_id:
             continue
+
         external_id = str(external_id).strip()
+
         if not external_id:
             continue
+
         passenger_external_id_map[int(passenger.id)] = external_id
         external_ids.add(external_id)
 
     booking_by_external_id: dict[str, Booking] = {}
+
     if external_ids:
         matched_bookings = (
             db.query(Booking)
             .filter(cast(Booking.external_id, String).in_(list(external_ids)))
             .all()
         )
+
         for booking in matched_bookings:
             external_id = _booking_external_id_key(booking)
+
             if external_id and external_id not in booking_by_external_id:
                 booking_by_external_id[external_id] = booking
 
+    # -------------------------------------------------------
+    # 3) Определяме booking за всеки passenger
+    # -------------------------------------------------------
     passenger_booking_map: dict[int, Booking] = {}
+
     for passenger in passengers:
+        passenger_id = int(passenger.id)
         booking = None
+
         if getattr(passenger, "booking_id", None):
             booking = booking_by_id.get(int(passenger.booking_id))
+
         if not booking:
-            external_id = passenger_external_id_map.get(int(passenger.id))
+            external_id = passenger_external_id_map.get(passenger_id)
+
             if external_id:
                 booking = booking_by_external_id.get(external_id)
+
         if booking:
-            passenger_booking_map[int(passenger.id)] = booking
+            passenger_booking_map[passenger_id] = booking
 
     if not passenger_booking_map:
         return overlay
 
-    all_booking_ids = sorted({int(booking.id) for booking in passenger_booking_map.values()})
+    # -------------------------------------------------------
+    # 4) Final seats за bookings
+    # -------------------------------------------------------
+    all_booking_ids = sorted({
+        int(booking.id)
+        for booking in passenger_booking_map.values()
+    })
+
     seats_by_booking_id: dict[int, list[str]] = {}
 
     if all_booking_ids:
         seat_rows = (
-            db.query(BookingSeat.booking_id, BookingSeat.seat_no)
+            db.query(
+                BookingSeat.booking_id,
+                BookingSeat.seat_no,
+            )
             .filter(
                 BookingSeat.booking_id.in_(all_booking_ids),
                 BookingSeat.is_final == True,
                 BookingSeat.seat_no.isnot(None),
             )
-            .order_by(BookingSeat.booking_id.asc(), BookingSeat.id.asc())
+            .order_by(
+                BookingSeat.booking_id.asc(),
+                BookingSeat.id.asc(),
+            )
             .all()
         )
 
         for booking_id, seat_no in seat_rows:
-            normalized_seat = _normalize_ticket_seat_no(seat_no)
-            if booking_id is not None and normalized_seat:
-                seats_by_booking_id.setdefault(int(booking_id), []).append(normalized_seat)
+            if booking_id is None or not seat_no:
+                continue
 
+            seat_value = str(seat_no).strip()
+
+            if not seat_value:
+                continue
+
+            seats_by_booking_id.setdefault(
+                int(booking_id),
+                [],
+            ).append(seat_value)
+
+    # -------------------------------------------------------
+    # 5) Групиране на passengers по booking
+    # -------------------------------------------------------
     passengers_by_booking_id: dict[int, list[TripPassenger]] = {}
+
     for passenger in passengers:
         booking = passenger_booking_map.get(int(passenger.id))
-        if booking:
-            passengers_by_booking_id.setdefault(int(booking.id), []).append(passenger)
 
-    booking_lookup = {int(booking.id): booking for booking in passenger_booking_map.values()}
+        if not booking:
+            continue
 
+        passengers_by_booking_id.setdefault(
+            int(booking.id),
+            [],
+        ).append(passenger)
+
+    # -------------------------------------------------------
+    # 6) Overlay payload
+    # -------------------------------------------------------
     for booking_id, passenger_rows in passengers_by_booking_id.items():
-        booking = booking_lookup.get(int(booking_id))
+        booking = None
+
+        for candidate in passenger_booking_map.values():
+            if int(candidate.id) == int(booking_id):
+                booking = candidate
+                break
+
         if not booking:
             continue
 
         final_seats = seats_by_booking_id.get(booking_id, [])
-        passenger_rows = sorted(passenger_rows, key=_trip_passenger_sort_key)
 
-        payment_method = _norm_payment_method(getattr(booking, "payment_method", None))
-        payment_status = str(getattr(booking, "payment_status", None) or "").strip().lower()
-        booking_currency = str(getattr(booking, "currency", None) or "EUR").strip().upper()
+        passenger_rows = sorted(
+            passenger_rows,
+            key=_trip_passenger_sort_key,
+        )
+
+        payment_method = _norm_payment_method(
+            getattr(booking, "payment_method", None)
+        )
+
+        payment_status = (
+            str(getattr(booking, "payment_status", None) or "")
+            .strip()
+            .lower()
+        )
+
+        booking_currency = (
+            str(getattr(booking, "currency", None) or "EUR")
+            .strip()
+            .upper()
+        )
 
         booking_total = None
+
         if getattr(booking, "total", None) is not None:
             try:
                 booking_total = float(booking.total)
@@ -3693,7 +5531,7 @@ def _build_trip_portal_overlay(
 
         for index, passenger in enumerate(passenger_rows):
             passenger_overlay = {
-                "paymentApproved": payment_status in {"paid", "approved", "payment_approved"},
+                "paymentApproved": payment_status == "paid",
                 "paymentMethod": payment_method,
                 "cashRequired": payment_method == "cash",
                 "bookingTotal": booking_total,
@@ -3706,8 +5544,6 @@ def _build_trip_portal_overlay(
             overlay[int(passenger.id)] = passenger_overlay
 
     return overlay
-
-
 
 def _driver_manifest_path(trip_id: int) -> Path:
     return DRIVER_MANIFESTS_DIR / f"trip_{int(trip_id)}.json"
@@ -4017,7 +5853,6 @@ def build_driver_trip_projection(db: Session, trip_id: int) -> dict:
 
 
 
-
 def _build_driver_trip_live_payload(db: Session, trip_id: int) -> dict:
     projection = build_driver_trip_projection(db, trip_id)
     trip = projection.get("trip")
@@ -4034,27 +5869,46 @@ def _build_driver_trip_live_payload(db: Session, trip_id: int) -> dict:
     boarding_state_map = _get_driver_boarding_state_map(db, trip_id)
 
     out: list[dict] = []
-    for passenger in kept_passengers:
-        item = _passenger_to_api_dict(passenger, trip)
-        overlay = portal_overlay.get(int(passenger.id), {})
+    for p in kept_passengers:
+        item = _passenger_to_api_dict(p, trip)
 
-        seat_override = _normalize_ticket_seat_no(overlay.get("seatNo"))
+        ov = portal_overlay.get(int(p.id), {})
+        seat_override = (ov.get("seatNo") or "").strip()
         if seat_override:
             item["seatNo"] = seat_override
 
-        item["paymentApproved"] = bool(overlay.get("paymentApproved"))
-        item["paymentBadgeLabel"] = "PAYMENT APPROVED" if item["paymentApproved"] else ""
-        item["paymentMethod"] = str(overlay.get("paymentMethod") or "").strip().lower()
-        item["cashRequired"] = bool(overlay.get("cashRequired"))
-        item["bookingTotal"] = overlay.get("bookingTotal")
-        item["bookingCurrency"] = str(
-            overlay.get("bookingCurrency") or item.get("currency") or "EUR"
-        ).strip().upper()
-
-        state = boarding_state_map.get(int(passenger.id), {})
-        item["boardingStatus"] = state.get("boarding_status") or (
-            "checked_in" if item.get("checkedIn") else "pending"
+        item["paymentBadgeLabel"] = (
+            "PAYMENT APPROVED"
+            if item["paymentApproved"]
+            else ""
         )
+
+        item["paymentMethod"] = (
+            str(ov.get("paymentMethod") or "")
+            .strip()
+            .lower()
+        )
+
+        item["cashRequired"] = bool(
+            ov.get("cashRequired")
+        )
+
+        item["bookingTotal"] = ov.get(
+            "bookingTotal"
+        )
+
+        item["bookingCurrency"] = (
+            str(
+                ov.get("bookingCurrency")
+                or item.get("currency")
+                or "EUR"
+            )
+            .strip()
+            .upper()
+        )
+
+        state = boarding_state_map.get(int(p.id), {})
+        item["boardingStatus"] = state.get("boarding_status") or ("checked_in" if item.get("checkedIn") else "pending")
         item["refusedReason"] = state.get("refused_reason")
         item["oebbChecked"] = bool(state.get("oebb_checked")) or bool(item.get("oebb"))
         item["cashCollectedAmount"] = state.get("cash_collected_amount")
@@ -4077,7 +5931,6 @@ def _build_driver_trip_live_payload(db: Session, trip_id: int) -> dict:
         "bookingPending": list(projection.get("booking_pending") or []),
         "bookingCoverage": list(projection.get("booking_coverage") or []),
     }
-
 
 
 def _ensure_driver_manifest_table(db: Session) -> None:
@@ -4301,23 +6154,101 @@ def _ensure_portal_or_redirect(request: Request):
 
 
 @app.get("/portal/ticket", response_class=HTMLResponse)
-def portal_ticket_page(request: Request, db: Session = Depends(get_db)):
-    booking, redirect_resp = _portal_booking_or_redirect(request, db)
+def portal_ticket_page(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    booking, redirect_resp = _portal_booking_or_redirect(
+        request,
+        db,
+    )
+
     if redirect_resp:
         return redirect_resp
 
     if not _can_portal_view_ticket(booking):
-        return RedirectResponse(url="/portal?cash_err=ticket", status_code=303)
+        return RedirectResponse(
+            url="/portal?cash_err=ticket",
+            status_code=303,
+        )
 
-    service_label = _booking_service_label(booking)
-    selected_seats = _booking_selected_seats(booking)
-    selected_seat = selected_seats[0] if selected_seats else None
-    qr_available = _ticket_qr_available(booking)
-    tickets = _portal_ticket_items(db, booking) if selected_seats else []
+    service_label = _booking_service_label(
+        booking,
+    )
 
-    stop_points = _booking_stop_points(booking)
-    first_departure_time = _extract_first_departure_time(getattr(booking, "time_range_raw", None))
-    departure_time_label = first_departure_time.strftime("%H:%M") if first_departure_time else None
+    selected_seats = _booking_selected_seats(
+        booking,
+    )
+
+    selected_seat = (
+        selected_seats[0]
+        if selected_seats
+        else None
+    )
+
+    ticket_lines = (
+        db.query(BookingTicketLine)
+        .filter(
+            BookingTicketLine.booking_id == booking.id
+        )
+        .order_by(
+            BookingTicketLine.id.asc()
+        )
+        .all()
+    )
+
+    tickets = _portal_ticket_items(
+        db=db,
+        booking=booking,
+        ticket_lines=ticket_lines,
+    )
+
+    stop_points = _booking_stop_points(
+        booking
+    )
+
+
+    qr_available = _ticket_qr_available(
+        booking,
+    )
+
+    tickets = (
+        _portal_ticket_items(
+            db,
+            booking,
+        )
+        if selected_seats
+        else []
+    )
+
+    ticket_lines = (
+        db.query(BookingTicketLine)
+        .filter(
+            BookingTicketLine.booking_id == booking.id
+        )
+        .order_by(
+            BookingTicketLine.id.asc()
+        )
+        .all()
+    )
+
+    stop_points = _booking_stop_points(
+        booking,
+    )
+
+    first_departure_time = _extract_first_departure_time(
+        getattr(
+            booking,
+            "time_range_raw",
+            None,
+        )
+    )
+
+    departure_time_label = (
+        first_departure_time.strftime("%H:%M")
+        if first_departure_time
+        else None
+    )
 
     return templates.TemplateResponse(
         request,
@@ -4327,14 +6258,14 @@ def portal_ticket_page(request: Request, db: Session = Depends(get_db)):
             "selected_seat": selected_seat,
             "selected_seats": selected_seats,
             "tickets": tickets,
+            "ticket_lines": ticket_lines,
             "service_label": service_label,
             "qr_available": qr_available,
             "stop_points": stop_points,
             "departure_time_label": departure_time_label,
+            "arrival_time_label": None,
         },
     )
-
-
 
 
 @app.get("/portal/ticket/qr")
@@ -4351,7 +6282,6 @@ def portal_ticket_qr(
     )
 
 
-
 @app.get("/portal/ticket/qr/download")
 def portal_ticket_qr_download(
     request: Request,
@@ -4365,50 +6295,185 @@ def portal_ticket_qr_download(
         seat_no=seat_no,
     )
 
-
-
 @app.get("/portal/ticket/pdf")
 def portal_ticket_pdf(
     request: Request,
     seat_no: str | None = None,
     db: Session = Depends(get_db),
 ):
-    booking, redirect_resp = _portal_booking_or_redirect(request, db)
+    booking, redirect_resp = _portal_booking_or_redirect(
+        request,
+        db,
+    )
+
     if redirect_resp:
         return redirect_resp
 
-    if not _can_portal_view_ticket(booking):
-        return RedirectResponse(url="/portal?cash_err=ticket", status_code=303)
+    if not _can_portal_view_ticket(
+        booking
+    ):
+        return RedirectResponse(
+            url="/portal?cash_err=ticket",
+            status_code=303,
+        )
 
-    selected_seat = _resolve_requested_ticket_seat(booking, seat_no)
+    selected_seat = _resolve_requested_ticket_seat(
+        booking,
+        seat_no,
+    )
+
     if not selected_seat:
-        return RedirectResponse(url="/portal/ticket", status_code=303)
+        return RedirectResponse(
+            url="/portal/ticket",
+            status_code=303,
+        )
 
     regular_font, bold_font = _ensure_pdf_unicode_fonts()
-    service_label = _booking_service_label(booking)
-    qr_available = _ticket_qr_available(booking)
 
-    trip = None
-    if getattr(booking, "trip_id", None):
-        trip = db.query(Trip).filter(Trip.id == booking.trip_id).first()
+    service_label = _booking_service_label(
+        booking
+    )
 
-    passenger = _find_ticket_passenger_for_seat(db, booking, selected_seat)
+    qr_available = bool(
+        selected_seat
+        and _ticket_qr_available(
+            booking
+        )
+    )
 
-    stop_points = _booking_stop_points(booking)
-    departure_stop = stop_points.get("departure", {}) or {}
-    arrival_stop = stop_points.get("arrival", {}) or {}
+    ticket_lines = (
+        db.query(BookingTicketLine)
+        .filter(
+            BookingTicketLine.booking_id == booking.id
+        )
+        .order_by(
+            BookingTicketLine.id.asc()
+        )
+        .all()
+    )
 
-    first_departure_time = _extract_first_departure_time(getattr(booking, "time_range_raw", None))
-    departure_time_label = first_departure_time.strftime("%H:%M") if first_departure_time else "-"
+    ticket_items = _portal_ticket_items(
+        db=db,
+        booking=booking,
+        ticket_lines=ticket_lines,
+    )
 
-    service_label_pdf = (service_label or "-").replace("•", "-").replace("→", "->")
-    departure_point_pdf = str(departure_stop.get("label") or "-").replace("•", "-").replace("→", "->")
-    departure_address_pdf = str(departure_stop.get("address") or "-").replace("•", "-").replace("→", "->")
-    arrival_point_pdf = str(arrival_stop.get("label") or "-").replace("•", "-").replace("→", "->")
-    arrival_address_pdf = str(arrival_stop.get("address") or "-").replace("•", "-").replace("→", "->")
+    current_ticket = next(
+        (
+            item
+            for item in ticket_items
+            if item.get("seat_no") == selected_seat
+        ),
+        {},
+    )
 
-    buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
+    stop_points = _booking_stop_points(
+        booking
+    )
+
+    departure_stop = (
+        stop_points.get(
+            "departure",
+            {},
+        )
+        or {}
+    )
+
+    arrival_stop = (
+        stop_points.get(
+            "arrival",
+            {},
+        )
+        or {}
+    )
+
+    first_departure_time = _extract_first_departure_time(
+        getattr(
+            booking,
+            "time_range_raw",
+            None,
+        )
+    )
+
+    departure_time_label = (
+        first_departure_time.strftime(
+            "%H:%M"
+        )
+        if first_departure_time
+        else "-"
+    )
+
+    # ASCII-safe separators за PDF.
+    service_label_pdf = (
+        service_label
+        or "-"
+    ).replace(
+        "•",
+        "-",
+    ).replace(
+        "→",
+        "->",
+    )
+
+    departure_point_pdf = str(
+        departure_stop.get(
+            "label"
+        )
+        or "-"
+    ).replace(
+        "•",
+        "-",
+    ).replace(
+        "→",
+        "->",
+    )
+
+    departure_address_pdf = str(
+        departure_stop.get(
+            "address"
+        )
+        or "-"
+    ).replace(
+        "•",
+        "-",
+    ).replace(
+        "→",
+        "->",
+    )
+
+    arrival_point_pdf = str(
+        arrival_stop.get(
+            "label"
+        )
+        or "-"
+    ).replace(
+        "•",
+        "-",
+    ).replace(
+        "→",
+        "->",
+    )
+
+    arrival_address_pdf = str(
+        arrival_stop.get(
+            "address"
+        )
+        or "-"
+    ).replace(
+        "•",
+        "-",
+    ).replace(
+        "→",
+        "->",
+    )
+
+    buf = io.BytesIO()
+
+    pdf = canvas.Canvas(
+        buf,
+        pagesize=A4,
+    )
+
     page_w, page_h = A4
 
     left = 20 * mm
@@ -4422,14 +6487,45 @@ def portal_ticket_pdf(
     card_h = page_h - 55 * mm
 
     pdf.setLineWidth(1)
-    pdf.roundRect(card_x, card_y, card_w, card_h, 10, stroke=1, fill=0)
 
-    pdf.setFont(bold_font, 20)
-    pdf.drawString(card_x + 12 * mm, top, "Boarding Ticket")
+    pdf.roundRect(
+        card_x,
+        card_y,
+        card_w,
+        card_h,
+        10,
+        stroke=1,
+        fill=0,
+    )
 
-    pdf.setFont(regular_font, 10)
-    pdf.drawString(card_x + 12 * mm, top - 7 * mm, f"Unique ID: {booking.external_id}")
-    pdf.line(card_x, top - 12 * mm, card_x + card_w, top - 12 * mm)
+    pdf.setFont(
+        bold_font,
+        20,
+    )
+
+    pdf.drawString(
+        card_x + 12 * mm,
+        top,
+        "Boarding Ticket",
+    )
+
+    pdf.setFont(
+        regular_font,
+        10,
+    )
+
+    pdf.drawString(
+        card_x + 12 * mm,
+        top - 7 * mm,
+        f"Unique ID: {booking.external_id}",
+    )
+
+    pdf.line(
+        card_x,
+        top - 12 * mm,
+        card_x + card_w,
+        top - 12 * mm,
+    )
 
     qr_box_size = 58 * mm
     qr_box_x = card_x + card_w - 78 * mm
@@ -4437,54 +6533,216 @@ def portal_ticket_pdf(
 
     text_x = card_x + 12 * mm
     text_right = qr_box_x - 10 * mm
-    text_width = max(60 * mm, text_right - text_x)
+    text_width = max(
+        60 * mm,
+        text_right - text_x,
+    )
+
     y = top - 24 * mm
 
-    def wrap_text(value: str, font_name: str, font_size: int, max_width: float) -> list[str]:
-        value = str(value or "-").strip() or "-"
+    def wrap_text(
+        value: str,
+        font_name: str,
+        font_size: int,
+        max_width: float,
+    ) -> list[str]:
+        value = str(
+            value
+            or "-"
+        ).strip() or "-"
+
         words = value.split()
+
         if not words:
             return ["-"]
 
         lines: list[str] = []
         current = words[0]
+
         for word in words[1:]:
-            candidate = f"{current} {word}"
-            if pdf.stringWidth(candidate, font_name, font_size) <= max_width:
+            candidate = (
+                f"{current} {word}"
+            )
+
+            if (
+                pdf.stringWidth(
+                    candidate,
+                    font_name,
+                    font_size,
+                )
+                <= max_width
+            ):
                 current = candidate
             else:
-                lines.append(current)
+                lines.append(
+                    current
+                )
+
                 current = word
-        lines.append(current)
+
+        lines.append(
+            current
+        )
+
         return lines
 
-    def row(label: str, value: str):
+    def row(
+        label: str,
+        value: str,
+    ):
         nonlocal y
-        pdf.setFont(regular_font, 9)
-        pdf.drawString(text_x, y, str(label or "-"))
+
+        label_text = str(
+            label
+            or "-"
+        )
+
+        value_text = str(
+            value
+            or "-"
+        )
+
+        pdf.setFont(
+            regular_font,
+            9,
+        )
+
+        pdf.drawString(
+            text_x,
+            y,
+            label_text,
+        )
+
+        value_lines = wrap_text(
+            value_text,
+            bold_font,
+            11,
+            text_width,
+        )
 
         value_y = y - 5 * mm
-        pdf.setFont(bold_font, 11)
-        for line in wrap_text(value, bold_font, 11, text_width):
-            pdf.drawString(text_x, value_y, line)
+
+        pdf.setFont(
+            bold_font,
+            11,
+        )
+
+        for line in value_lines:
+            pdf.drawString(
+                text_x,
+                value_y,
+                line,
+            )
+
             value_y -= 4.6 * mm
+
         y = value_y - 3 * mm
 
-    passenger_name = f"{booking.first_name or ''} {booking.last_name or ''}".strip() or "-"
-    passenger_route = f"{booking.route_from or '-'} -> {booking.route_to or '-'}"
+    passenger_name = (
+        f"{booking.first_name or ''} "
+        f"{booking.last_name or ''}"
+    ).strip() or "-"
 
-    row("Passenger", passenger_name)
-    row("Service", service_label_pdf)
-    row("Passenger route", passenger_route)
-    row("Time DEPARTURE", departure_time_label)
-    row("Departure point", departure_point_pdf)
-    row("Departure address", departure_address_pdf)
-    row("Arrival point", arrival_point_pdf)
-    row("Arrival address", arrival_address_pdf)
-    row("Seat", selected_seat)
-    row("Payment status", booking.payment_status or "-")
-    row("Booking status", booking.booking_status or "-")
-    row("Booking reference", f"#{booking.id}")
+    passenger_route = (
+        f"{booking.route_from or '-'} "
+        f"-> "
+        f"{booking.route_to or '-'}"
+    )
+
+    seat_label = (
+        selected_seat
+        or "Assigned later by dispatch"
+    )
+
+    payment_status = (
+        booking.payment_status
+        or "-"
+    )
+
+    booking_status = (
+        booking.booking_status
+        or "-"
+    )
+
+    booking_ref = (
+        f"#{booking.id}"
+    )
+
+    row(
+        "Passenger",
+        passenger_name,
+    )
+
+    row(
+        "Service",
+        service_label_pdf,
+    )
+
+    row(
+        "Passenger route",
+        passenger_route,
+    )
+
+    row(
+        "Time DEPARTURE",
+        departure_time_label,
+    )
+
+    row(
+        "Departure point",
+        departure_point_pdf,
+    )
+
+    row(
+        "Departure address",
+        departure_address_pdf,
+    )
+
+    row(
+        "Arrival point",
+        arrival_point_pdf,
+    )
+
+    row(
+        "Arrival address",
+        arrival_address_pdf,
+    )
+
+    row(
+        "Seat",
+        seat_label,
+    )
+
+    row(
+        "Ticket price",
+        current_ticket.get(
+            "ticket_price_text"
+        )
+        or "-",
+    )
+
+    row(
+        "Booking total",
+        current_ticket.get(
+            "booking_total_text"
+        )
+        or "-",
+    )
+
+    row(
+        "Payment status",
+        payment_status,
+    )
+
+    row(
+        "Booking status",
+        booking_status,
+    )
+
+    row(
+        "Booking reference",
+        booking_ref,
+    )
 
     pdf.roundRect(
         qr_box_x - 6 * mm,
@@ -4495,55 +6753,136 @@ def portal_ticket_pdf(
         stroke=1,
         fill=0,
     )
-    pdf.setFont(bold_font, 12)
-    pdf.drawCentredString(qr_box_x + qr_box_size / 2, qr_box_y + qr_box_size + 6 * mm, "Boarding QR")
 
-    if qr_available:
-        payload = _portal_ticket_payload(
-            booking=booking,
-            selected_seat=selected_seat,
-            passenger=passenger,
-            trip=trip,
+    pdf.setFont(
+        bold_font,
+        12,
+    )
+
+    pdf.drawCentredString(
+        qr_box_x + qr_box_size / 2,
+        qr_box_y + qr_box_size + 6 * mm,
+        "Boarding QR",
+    )
+
+    if (
+        qr_available
+        and selected_seat
+    ):
+        qr_data = _portal_ticket_payload_text(
+            booking,
+            selected_seat,
         )
-        qr_data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        qr = QrCodeWidget(qr_data)
+
+        qr = QrCodeWidget(
+            qr_data
+        )
+
         bounds = qr.getBounds()
-        qr_width = max(bounds[2] - bounds[0], 1)
-        qr_height = max(bounds[3] - bounds[1], 1)
+
+        bw = (
+            bounds[2] -
+            bounds[0]
+        )
+
+        bh = (
+            bounds[3] -
+            bounds[1]
+        )
+
         drawing = Drawing(
             qr_box_size,
             qr_box_size,
-            transform=[qr_box_size / qr_width, 0, 0, qr_box_size / qr_height, 0, 0],
+            transform=[
+                qr_box_size / bw,
+                0,
+                0,
+                qr_box_size / bh,
+                0,
+                0,
+            ],
         )
-        drawing.add(qr)
-        renderPDF.draw(drawing, pdf, qr_box_x, qr_box_y)
 
-        pdf.setFont(regular_font, 9)
-        pdf.drawCentredString(qr_box_x + qr_box_size / 2, qr_box_y - 7 * mm, "Show during boarding")
+        drawing.add(
+            qr
+        )
+
+        renderPDF.draw(
+            drawing,
+            pdf,
+            qr_box_x,
+            qr_box_y,
+        )
+
+        pdf.setFont(
+            regular_font,
+            9,
+        )
+
+        pdf.drawCentredString(
+            qr_box_x + qr_box_size / 2,
+            qr_box_y - 7 * mm,
+            "Show during boarding",
+        )
+
     else:
-        pdf.setFont(regular_font, 10)
-        pdf.drawString(qr_box_x, qr_box_y + 22 * mm, "QR will become available")
-        pdf.drawString(qr_box_x, qr_box_y + 16 * mm, "after a final seat is assigned.")
+        pdf.setFont(
+            regular_font,
+            10,
+        )
 
-    pdf.setFont(regular_font, 8)
-    pdf.drawString(card_x + 12 * mm, card_y + 8 * mm, "Generated from passenger portal")
+        pdf.drawString(
+            qr_box_x,
+            qr_box_y + 22 * mm,
+            "QR will become available",
+        )
+
+        pdf.drawString(
+            qr_box_x,
+            qr_box_y + 16 * mm,
+            "after a final seat is assigned.",
+        )
+
+    pdf.setFont(
+        regular_font,
+        8,
+    )
+
+    pdf.drawString(
+        card_x + 12 * mm,
+        card_y + 8 * mm,
+        "Generated from passenger portal",
+    )
+
     pdf.showPage()
     pdf.save()
 
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
+    pdf_bytes = buf.getvalue()
 
-    filename = f"ticket-{booking.external_id}-seat-{selected_seat}.pdf"
+    buf.close()
+
+    filename = (
+        f"ticket-{booking.external_id}"
+        f"-seat-{selected_seat or 'unknown'}.pdf"
+    )
+
+    headers = {
+        "Content-Disposition": (
+            f'attachment; '
+            f'filename="{filename}"'
+        )
+    }
+
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers=headers,
     )
 
 
-
-
-
+# =======================
+# Driver QR scan verdict
+# =======================
 
 def _scan_optional_int(value) -> int | None:
     try:
@@ -4554,7 +6893,235 @@ def _scan_optional_int(value) -> int | None:
         return None
 
 
+def _driver_scan_effective_seat(
+    booking: Booking | None,
+    passenger: TripPassenger | None,
+    payload: dict | None,
+) -> str | None:
+    """
+    Връща актуалното място на пътника.
+
+    Приоритет:
+      1) TripPassenger.manual_seat_no / seat_no
+      2) QR payload seat_no
+      3) първото FINAL BookingSeat място за backward compatibility
+    """
+    payload = payload or {}
+
+    values = [
+        getattr(passenger, "manual_seat_no", None) if passenger else None,
+        getattr(passenger, "seat_no", None) if passenger else None,
+        payload.get("seat_no"),
+        _booking_selected_seat(booking) if booking else None,
+    ]
+
+    for value in values:
+        seat_no = _normalize_ticket_seat_no(value)
+        if seat_no:
+            return seat_no
+
+    return None
+
+
+def _build_driver_scan_verdict(
+    db: Session,
+    *,
+    booking: Booking | None,
+    passenger: TripPassenger | None,
+    payload: dict | None,
+    active_trip_id: int | None = None,
+    boarding_state: dict | None = None,
+) -> dict:
+    """
+    Оценява QR билета за tablet scanner екрана.
+
+    Зелен резултат:
+      - booking и passenger са намерени
+      - билетът е за отворения рейс
+      - booking не е cancelled
+      - има определено място
+      - плащането е приключено
+
+    Червен резултат:
+      - грешен рейс
+      - липсва място
+      - cash трябва да бъде събран
+      - bank/paypal не е потвърдено
+      - cancelled booking
+    """
+    payload = payload or {}
+    boarding_state = boarding_state or {}
+
+    checks: list[dict] = []
+
+    def add_check(
+        key: str,
+        label: str,
+        ok: bool,
+        message_ok: str,
+        message_attention: str,
+    ) -> None:
+        checks.append({
+            "key": key,
+            "label": label,
+            "ok": bool(ok),
+            "message": message_ok if ok else message_attention,
+        })
+
+    actual_trip_id = _scan_optional_int(
+        getattr(passenger, "trip_id", None)
+        or getattr(booking, "trip_id", None)
+        or payload.get("trip_id")
+    )
+
+    expected_trip_id = _scan_optional_int(active_trip_id)
+
+    same_trip = True
+    if expected_trip_id is not None:
+        same_trip = (
+            actual_trip_id is not None
+            and int(actual_trip_id) == int(expected_trip_id)
+        )
+
+    add_check(
+        "trip",
+        "Рейс",
+        same_trip,
+        "Билетът е за избрания рейс.",
+        "Билетът е за друг рейс. Не допускай качване.",
+    )
+
+    booking_status = str(
+        getattr(booking, "booking_status", None)
+        or payload.get("booking_status")
+        or ""
+    ).strip().lower()
+
+    booking_active = booking_status not in {
+        "cancelled",
+        "cancellation_requested",
+    }
+
+    add_check(
+        "booking_status",
+        "Резервация",
+        booking_active,
+        "Резервацията е активна.",
+        "Резервацията е анулирана или е заявена анулация.",
+    )
+
+    seat_no = _driver_scan_effective_seat(
+        booking=booking,
+        passenger=passenger,
+        payload=payload,
+    )
+
+    seat_ok = bool(seat_no)
+
+    add_check(
+        "seat",
+        "Място",
+        seat_ok,
+        f"Място: {seat_no}",
+        "Не е избрано място. Не допускай качване преди назначаване.",
+    )
+
+    payment_method = _norm_payment_method(
+        getattr(booking, "payment_method", None)
+        if booking
+        else None
+    )
+
+    payment_status = str(
+        getattr(booking, "payment_status", None)
+        or payload.get("payment_status")
+        or ""
+    ).strip().lower()
+
+    cash_recorded = bool(
+        getattr(passenger, "paid", False)
+        if passenger
+        else False
+    ) or boarding_state.get("cash_collected_amount") is not None
+
+    if payment_method == "cash":
+        payment_ok = cash_recorded
+
+        add_check(
+            "payment",
+            "Плащане",
+            payment_ok,
+            "Кеш плащането е записано.",
+            "Плащането е в кеш. Събери и запиши сумата преди чекиране.",
+        )
+    else:
+        payment_ok = payment_status in {
+            "paid",
+            "approved",
+            "payment_approved",
+        }
+
+        add_check(
+            "payment",
+            "Плащане",
+            payment_ok,
+            "Плащането е потвърдено.",
+            "Плащането не е потвърдено. Провери резервацията.",
+        )
+
+    passenger_found = passenger is not None
+
+    add_check(
+        "passenger",
+        "Пътник",
+        passenger_found,
+        "Пътникът е намерен в списъка.",
+        "QR кодът не е свързан с пътник от списъка.",
+    )
+
+    all_ok = all(bool(item["ok"]) for item in checks)
+
+    blocking_problem = (
+        not passenger_found
+        or not same_trip
+        or not booking_active
+        or not seat_ok
+        or not payment_ok
+    )
+
+    return {
+        "ok": all_ok,
+        "level": "ok" if all_ok else "attention",
+        "headline": (
+            "ВСИЧКО Е НАРЕД"
+            if all_ok
+            else "НЕОБХОДИМА Е ПРОВЕРКА"
+        ),
+        "message": (
+            "Пътникът може да бъде чекиран."
+            if all_ok
+            else "Има параметър, който трябва да бъде проверен преди качване."
+        ),
+        "checks": checks,
+        "seat_no": seat_no,
+        "payment_method": payment_method or "—",
+        "payment_status": payment_status or "—",
+        "actual_trip_id": actual_trip_id,
+        "expected_trip_id": expected_trip_id,
+        "same_trip": same_trip,
+        "booking_active": booking_active,
+        "requires_cash_collection": (
+            payment_method == "cash"
+            and not cash_recorded
+        ),
+        "can_check_in": not blocking_problem,
+    }
+
+ 
 def _scan_decimal_amount(value) -> Decimal | None:
+    """
+    Безопасно преобразува стойност към положителна Decimal сума.
+    """
     if value in (None, ""):
         return None
 
@@ -4573,12 +7140,20 @@ def _scan_cash_amount_due(
     booking: Booking,
     passenger: TripPassenger | None,
 ) -> tuple[str | None, str]:
-    """Определя сумата за касиране при CASH билет."""
-    currency = str(
+    """
+    Определя сумата за касиране при CASH билет.
+
+    Приоритет:
+      1) TripPassenger.amount_due — ако има индивидуална сума
+      2) Booking.total — fallback за booking-а
+    """
+    currency = (
         getattr(passenger, "currency", None)
         or getattr(booking, "currency", None)
         or "EUR"
-    ).strip().upper() or "EUR"
+    )
+
+    currency = str(currency).strip().upper() or "EUR"
 
     candidates = [
         getattr(passenger, "amount_due", None) if passenger else None,
@@ -4587,30 +7162,13 @@ def _scan_cash_amount_due(
 
     for candidate in candidates:
         amount = _scan_decimal_amount(candidate)
+
         if amount is not None:
             return f"{amount:.2f}", currency
 
     return None, currency
 
 
-def _driver_scan_effective_seat(
-    booking: Booking,
-    passenger: TripPassenger | None,
-    payload: dict,
-) -> str | None:
-    values = [
-        getattr(passenger, "manual_seat_no", None) if passenger else None,
-        getattr(passenger, "seat_no", None) if passenger else None,
-        payload.get("seat_no"),
-        _booking_selected_seat(booking),
-    ]
-
-    for value in values:
-        seat_no = _normalize_ticket_seat_no(value)
-        if seat_no:
-            return seat_no
-
-    return None
 
 
 def _driver_scan_trip_id(
@@ -4618,6 +7176,9 @@ def _driver_scan_trip_id(
     passenger: TripPassenger | None,
     payload: dict,
 ) -> int | None:
+    """
+    Определя рейса по live данни, а след това по QR payload.
+    """
     values = [
         getattr(passenger, "trip_id", None) if passenger else None,
         getattr(booking, "trip_id", None),
@@ -4625,9 +7186,13 @@ def _driver_scan_trip_id(
     ]
 
     for value in values:
-        parsed = _scan_optional_int(value)
-        if parsed is not None:
-            return parsed
+        if value in (None, ""):
+            continue
+
+        try:
+            return int(value)
+        except Exception:
+            continue
 
     return None
 
@@ -4641,84 +7206,176 @@ def _driver_scan_validation(
     """
     Проверява дали QR билетът може да бъде записан като чекиран.
 
-    CASH билетът връща точната сума за касиране и изисква отделното
-    действие collect_cash.
-    """
-    resolved_trip_id = _driver_scan_trip_id(booking, passenger, payload)
-    seat_no = _driver_scan_effective_seat(booking, passenger, payload)
-    payment_method = _norm_payment_method(getattr(booking, "payment_method", None))
-    payment_status = str(getattr(booking, "payment_status", None) or "").strip().lower()
-    booking_status = str(getattr(booking, "booking_status", None) or "").strip().lower()
+    Зелен резултат:
+      - има място
+      - билетът е за текущия рейс
+      - booking не е отменен
+      - плащането не е CASH
+      - online плащането е одобрено
 
-    cash_amount, cash_currency = _scan_cash_amount_due(booking, passenger)
+    Червен резултат:
+      - липсва място
+      - грешен рейс
+      - билетът е отменен
+      - CASH плащане
+      - online плащането не е потвърдено
+    """
+    resolved_trip_id = _driver_scan_trip_id(
+        booking=booking,
+        passenger=passenger,
+        payload=payload,
+    )
+
+    seat_no = _driver_scan_effective_seat(
+        booking=booking,
+        passenger=passenger,
+        payload=payload,
+    )
+
+    payment_method = _norm_payment_method(
+        getattr(booking, "payment_method", None)
+    )
+
+    payment_status = (
+        str(getattr(booking, "payment_status", None) or "")
+        .strip()
+        .lower()
+    )
+
+    booking_status = (
+        str(getattr(booking, "booking_status", None) or "")
+        .strip()
+        .lower()
+    )
+
+    cash_amount, cash_currency = _scan_cash_amount_due(
+        booking=booking,
+        passenger=passenger,
+    )
+
     issues: list[dict] = []
 
-    active_trip_id = _scan_optional_int(active_trip_id)
+    if active_trip_id is not None:
+        try:
+            active_trip_id = int(active_trip_id)
+        except Exception:
+            active_trip_id = None
+
     if active_trip_id is not None:
         if resolved_trip_id is None:
-            issues.append({"code": "missing_trip", "message": "Билетът няма свързан рейс."})
+            issues.append({
+                "code": "missing_trip",
+                "message": "Билетът няма свързан рейс.",
+            })
+
         elif int(resolved_trip_id) != int(active_trip_id):
             issues.append({
                 "code": "wrong_trip",
-                "message": f"Билетът е за друг рейс: #{resolved_trip_id}. Отвореният рейс е #{active_trip_id}.",
+                "message": (
+                    f"Билетът е за друг рейс: #{resolved_trip_id}. "
+                    f"Отвореният рейс е #{active_trip_id}."
+                ),
             })
 
-    if booking_status in {"cancelled", "canceled", "cancellation_requested"}:
-        issues.append({"code": "cancelled", "message": "Резервацията е отменена или има заявена анулация."})
+    if booking_status in {"cancelled", "cancellation_requested"}:
+        issues.append({
+            "code": "cancelled",
+            "message": "Резервацията е отменена или има заявена анулация.",
+        })
 
     if not seat_no:
-        issues.append({"code": "missing_seat", "message": "Не е избрано място за пътника."})
+        issues.append({
+            "code": "missing_seat",
+            "message": "Не е избрано място за пътника.",
+        })
 
-    cash_already_collected = bool(getattr(passenger, "paid", False))
-
-    if payment_method == "cash" and not cash_already_collected:
+    if payment_method == "cash":
         if cash_amount:
-            cash_message = f"Плащането е CASH. Касирай от пътника: {cash_amount} {cash_currency}."
+            cash_message = (
+                f"Плащането е CASH. Касирай от пътника: "
+                f"{cash_amount} {cash_currency}."
+            )
         else:
-            cash_message = "Плащането е CASH. Провери сумата за касиране преди качване на пътника."
+            cash_message = (
+                "Плащането е CASH. Провери сумата за касиране "
+                "преди качване на пътника."
+            )
 
-        issues.append({"code": "cash", "message": cash_message})
-    elif payment_method != "cash" and payment_status not in {"paid", "approved", "payment_approved"}:
-        issues.append({"code": "payment_not_approved", "message": "Плащането не е потвърдено като платено."})
+        issues.append({
+            "code": "cash",
+            "message": cash_message,
+        })
+
+    elif payment_status != "paid":
+        issues.append({
+            "code": "payment_not_approved",
+            "message": "Плащането не е потвърдено като платено.",
+        })
 
     allow_save = len(issues) == 0
+
     passenger_name = (
         _qr_clean_text(payload.get("passenger_name"))
         or f"{getattr(booking, 'first_name', '') or ''} {getattr(booking, 'last_name', '') or ''}".strip()
-        or _effective_text(getattr(passenger, "manual_full_name", None), getattr(passenger, "full_name", None)).strip()
+        or _effective_text(
+            getattr(passenger, "manual_full_name", None),
+            getattr(passenger, "full_name", None),
+        ).strip()
         or "—"
     )
 
+    route_from = (
+        _qr_clean_text(payload.get("route_from"))
+        or _qr_clean_text(getattr(booking, "route_from", None))
+        or "—"
+    )
+
+    route_to = (
+        _qr_clean_text(payload.get("route_to"))
+        or _qr_clean_text(getattr(booking, "route_to", None))
+        or "—"
+    )
+
+    if allow_save:
+        message = "Всичко е наред. Пътникът може да бъде записан в списъка."
+    elif payment_method == "cash":
+        message = "Билетът изисква касиране при качване."
+    else:
+        message = "Билетът не може да бъде записан автоматично."
+
     return {
         "allow_save": allow_save,
-        "message": (
-            "Всичко е наред. Пътникът може да бъде записан в списъка."
-            if allow_save
-            else (
-                "Билетът изисква касиране при качване."
-                if payment_method == "cash"
-                else "Билетът не може да бъде записан автоматично."
-            )
-        ),
+        "message": message,
         "issues": issues,
+
         "trip_id": resolved_trip_id,
         "active_trip_id": active_trip_id,
+
         "booking_id": getattr(booking, "id", None),
-        "external_id": _qr_clean_text(getattr(booking, "external_id", None)),
+        "external_id": _qr_clean_text(
+            getattr(booking, "external_id", None)
+        ),
+
         "passenger_id": getattr(passenger, "id", None),
         "passenger_name": passenger_name,
-        "route_from": _qr_clean_text(payload.get("route_from")) or _qr_clean_text(getattr(booking, "route_from", None)) or "—",
-        "route_to": _qr_clean_text(payload.get("route_to")) or _qr_clean_text(getattr(booking, "route_to", None)) or "—",
+
+        "route_from": route_from,
+        "route_to": route_to,
+
         "seat_no": seat_no,
+
         "payment_method": payment_method or "—",
-        "payment_status": getattr(booking, "payment_status", None) or "—",
-        "booking_status": getattr(booking, "booking_status", None) or "—",
-        "cash_required": payment_method == "cash" and not cash_already_collected,
-        "cash_already_collected": cash_already_collected,
+        "payment_status": (
+            getattr(booking, "payment_status", None) or "—"
+        ),
+        "booking_status": (
+            getattr(booking, "booking_status", None) or "—"
+        ),
+
+        "cash_required": payment_method == "cash",
         "cash_amount": cash_amount,
         "cash_currency": cash_currency,
     }
-
 
 @app.get("/drivers/scan", response_class=HTMLResponse)
 def drivers_scan_get(
@@ -4730,6 +7387,7 @@ def drivers_scan_get(
     _ensure_driver(request)
 
     result = None
+
     if saved:
         result = {
             "ok": True,
@@ -4741,6 +7399,7 @@ def drivers_scan_get(
             "boarding_state": None,
             "scan": None,
         }
+
     elif err:
         err_map = {
             "invalid_qr": "QR кодът не е валиден.",
@@ -4750,9 +7409,8 @@ def drivers_scan_get(
             "bad_action": "Невалидно действие.",
             "not_ready": "Билетът има проблем и не може да бъде записан.",
             "missing_trip": "Пътникът няма свързан рейс.",
-            "wrong_trip": "Билетът е за друг рейс.",
-            "not_cash": "Резервацията не е CASH.",
         }
+
         result = {
             "ok": False,
             "saved": False,
@@ -4767,10 +7425,12 @@ def drivers_scan_get(
     return templates.TemplateResponse(
         request,
         "drivers_scan.html",
-        {"result": result, "payload_text": "", "trip_id": trip_id},
+        {
+            "result": result,
+            "payload_text": "",
+            "trip_id": trip_id,
+        },
     )
-
-
 
 
 @app.post("/drivers/scan", response_class=HTMLResponse)
@@ -4785,9 +7445,16 @@ def drivers_scan_submit(
     payload_text = (qr_payload or "").strip()
     payload = _parse_ticket_payload(payload_text)
 
-    active_trip_id = _scan_optional_int(trip_id)
+    active_trip_id = trip_id
+
     if active_trip_id is None:
-        active_trip_id = _scan_optional_int(request.query_params.get("trip_id"))
+        query_trip_id = request.query_params.get("trip_id")
+
+        if query_trip_id:
+            try:
+                active_trip_id = int(query_trip_id)
+            except Exception:
+                active_trip_id = None
 
     result = {
         "ok": False,
@@ -4802,42 +7469,64 @@ def drivers_scan_submit(
 
     if not payload:
         result["message"] = "QR кодът не е валиден."
-    else:
-        booking, passenger = _resolve_trip_passenger_by_ticket_payload(db, payload)
 
-        if not booking:
-            result["message"] = "Резервацията не е намерена."
-            result["parsed_payload"] = payload
-        elif not passenger:
-            result["message"] = "Пътникът не е намерен за този QR код."
-            result["booking"] = booking
-            result["parsed_payload"] = payload
-        else:
-            boarding_state = _get_driver_boarding_state_row(db, passenger.id)
-            scan = _driver_scan_validation(
-                booking=booking,
-                passenger=passenger,
-                payload=payload,
-                active_trip_id=active_trip_id,
-            )
-            result = {
-                "ok": bool(scan.get("allow_save")),
-                "saved": False,
-                "message": scan.get("message") or "QR кодът е прочетен.",
-                "booking": booking,
-                "passenger": passenger,
-                "parsed_payload": payload,
-                "boarding_state": boarding_state,
-                "scan": scan,
-            }
+        return templates.TemplateResponse(
+            request,
+            "drivers_scan.html",
+            {
+                "result": result,
+                "payload_text": payload_text,
+                "trip_id": active_trip_id,
+            },
+        )
+
+    booking, passenger = _resolve_trip_passenger_by_ticket_payload(
+        db,
+        payload,
+    )
+
+    if not booking:
+        result["message"] = "Резервацията не е намерена."
+        result["parsed_payload"] = payload
+
+    elif not passenger:
+        result["message"] = "Пътникът не е намерен за този QR код."
+        result["booking"] = booking
+        result["parsed_payload"] = payload
+
+    else:
+        boarding_state = _get_driver_boarding_state_row(
+            db,
+            passenger.id,
+        )
+
+        scan = _driver_scan_validation(
+            booking=booking,
+            passenger=passenger,
+            payload=payload,
+            active_trip_id=active_trip_id,
+        )
+
+        result = {
+            "ok": bool(scan.get("allow_save")),
+            "saved": False,
+            "message": scan.get("message") or "QR кодът е прочетен.",
+            "booking": booking,
+            "passenger": passenger,
+            "parsed_payload": payload,
+            "boarding_state": boarding_state,
+            "scan": scan,
+        }
 
     return templates.TemplateResponse(
         request,
         "drivers_scan.html",
-        {"result": result, "payload_text": payload_text, "trip_id": active_trip_id},
+        {
+            "result": result,
+            "payload_text": payload_text,
+            "trip_id": active_trip_id,
+        },
     )
-
-
 
 
 @app.post("/drivers/scan/action")
@@ -4854,32 +7543,64 @@ def drivers_scan_action(
 ):
     _ensure_driver(request)
 
-    payload = _parse_ticket_payload((qr_payload or "").strip())
+    payload = _parse_ticket_payload(
+        (qr_payload or "").strip()
+    )
+
     if not payload:
-        return RedirectResponse(url="/drivers/scan?err=invalid_qr", status_code=303)
+        return RedirectResponse(
+            url="/drivers/scan?err=invalid_qr",
+            status_code=303,
+        )
 
-    booking, passenger = _resolve_trip_passenger_by_ticket_payload(db, payload)
+    booking, passenger = _resolve_trip_passenger_by_ticket_payload(
+        db,
+        payload,
+    )
+
     if not booking or not passenger:
-        return RedirectResponse(url="/drivers/scan?err=notfound", status_code=303)
+        return RedirectResponse(
+            url="/drivers/scan?err=notfound",
+            status_code=303,
+        )
 
-    resolved_trip_id = _driver_scan_trip_id(booking, passenger, payload)
+    resolved_trip_id = _driver_scan_trip_id(
+        booking=booking,
+        passenger=passenger,
+        payload=payload,
+    )
+
     if resolved_trip_id is None:
-        return RedirectResponse(url="/drivers/scan?err=missing_trip", status_code=303)
-
-    active_trip_id = _scan_optional_int(trip_id) or _scan_optional_int(request.query_params.get("trip_id"))
-    if active_trip_id is not None and int(active_trip_id) != int(resolved_trip_id):
-        return RedirectResponse(url=f"/drivers/scan?trip_id={active_trip_id}&err=wrong_trip", status_code=303)
+        return RedirectResponse(
+            url="/drivers/scan?err=missing_trip",
+            status_code=303,
+        )
 
     if not getattr(passenger, "trip_id", None):
         passenger.trip_id = resolved_trip_id
 
-    current_state = _get_driver_boarding_state_row(db, passenger.id) or {}
+    current_state = _get_driver_boarding_state_row(
+        db,
+        passenger.id,
+    ) or {}
+
     boarding_status = current_state.get("boarding_status") or (
-        "checked_in" if bool(getattr(passenger, "checked_in", False)) else "pending"
+        "checked_in"
+        if bool(getattr(passenger, "checked_in", False))
+        else "pending"
     )
+
     refused_reason_value = current_state.get("refused_reason")
-    oebb_checked = bool(current_state.get("oebb_checked")) or bool(getattr(passenger, "oebb", False))
-    cash_collected_amount = current_state.get("cash_collected_amount")
+
+    oebb_checked = (
+        bool(current_state.get("oebb_checked"))
+        or bool(getattr(passenger, "oebb", False))
+    )
+
+    cash_collected_amount = current_state.get(
+        "cash_collected_amount"
+    )
+
     cash_collected_currency = (
         current_state.get("cash_collected_currency")
         or getattr(passenger, "currency", None)
@@ -4888,53 +7609,69 @@ def drivers_scan_action(
 
     action = (action or "").strip().lower()
 
-    if action in {"save_passenger", "check_in", "checkin"}:
-        scan = _driver_scan_validation(booking, passenger, payload, active_trip_id=active_trip_id)
+    if action in {
+        "save_passenger",
+        "check_in",
+        "checkin",
+    }:
+        scan = _driver_scan_validation(
+            booking=booking,
+            passenger=passenger,
+            payload=payload,
+            active_trip_id=trip_id,
+        )
+
         if not scan.get("allow_save"):
             return RedirectResponse(
                 url=f"/drivers/scan?trip_id={resolved_trip_id}&err=not_ready",
                 status_code=303,
             )
+
         passenger.checked_in = True
         boarding_status = "checked_in"
         refused_reason_value = None
 
     elif action in {"collect_cash", "cash"}:
-        if _norm_payment_method(getattr(booking, "payment_method", None)) != "cash":
-            return RedirectResponse(
-                url=f"/drivers/scan?trip_id={resolved_trip_id}&err=not_cash",
-                status_code=303,
-            )
-
         raw_amount = (cash_amount or "").strip()
+
         if not raw_amount:
             return RedirectResponse(
-                url=f"/drivers/scan?trip_id={resolved_trip_id}&err=cash_amount_missing",
+                url=f"/drivers/scan?err=cash_amount_missing&trip_id={passenger.trip_id}",
                 status_code=303,
             )
 
         try:
-            parsed_amount = Decimal(raw_amount.replace(",", ".")).quantize(Decimal("0.01"))
+            parsed_amount = Decimal(
+                raw_amount.replace(",", ".")
+            ).quantize(Decimal("0.01"))
         except (InvalidOperation, ValueError, TypeError):
             return RedirectResponse(
-                url=f"/drivers/scan?trip_id={resolved_trip_id}&err=cash_amount_invalid",
+                url=f"/drivers/scan?err=cash_amount_invalid&trip_id={passenger.trip_id}",
                 status_code=303,
             )
 
         if parsed_amount <= 0:
             return RedirectResponse(
-                url=f"/drivers/scan?trip_id={resolved_trip_id}&err=cash_amount_invalid",
+                url=f"/drivers/scan?err=cash_amount_invalid&trip_id={passenger.trip_id}",
                 status_code=303,
             )
 
         passenger.paid = True
         passenger.checked_in = True
-        passenger.amount = parsed_amount
-        passenger.currency = (cash_currency or "EUR").upper().strip() or "EUR"
+        passenger.amount = float(parsed_amount)
+        passenger.currency = (
+            (cash_currency or "EUR")
+            .upper()
+            .strip()
+            or "EUR"
+        )
+
         boarding_status = "checked_in"
         refused_reason_value = None
-        cash_collected_amount = parsed_amount
+
+        cash_collected_amount = float(parsed_amount)
         cash_collected_currency = passenger.currency
+
 
     elif action in {"check_oebb", "oebb"}:
         passenger.oebb = True
@@ -4943,6 +7680,7 @@ def drivers_scan_action(
     elif action == "refuse":
         passenger.checked_in = False
         boarding_status = "refused"
+
         refused_reason_value = (
             (refused_reason or "").strip()
             or (refuse_reason or "").strip()
@@ -4962,7 +7700,10 @@ def drivers_scan_action(
         booking_id=getattr(passenger, "booking_id", None),
         boarding_status=boarding_status,
         refused_reason=refused_reason_value,
-        last_qr_payload=json.dumps(payload, ensure_ascii=False),
+        last_qr_payload=json.dumps(
+            payload,
+            ensure_ascii=False,
+        ),
         oebb_checked=oebb_checked,
         cash_collected_amount=cash_collected_amount,
         cash_collected_currency=cash_collected_currency,
@@ -4970,11 +7711,21 @@ def drivers_scan_action(
     )
 
     db.commit()
+
+    if action in {
+        "save_passenger",
+        "check_in",
+        "checkin",
+    }:
+        return RedirectResponse(
+            url=f"/drivers/scan?trip_id={resolved_trip_id}&saved=1",
+            status_code=303,
+        )
+
     return RedirectResponse(
-        url=f"/drivers/scan?trip_id={resolved_trip_id}&saved={quote(action)}",
+        url=f"/drivers/trips/{resolved_trip_id}?scan_ok={action}",
         status_code=303,
     )
-
 
 
 @app.post("/admin/bookings/{booking_id}/assign-seat")
@@ -5272,28 +8023,40 @@ def admin_bookings_list_page(
     )
 
 
-@app.get("/admin/bookings", response_class=HTMLResponse)
-def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db)):
-    r = _ensure_admin_or_redirect(request)
-    if r:
-        return r
+def _admin_bookings_dashboard_stats(db: Session) -> dict:
+    """
+    Live статистика за горните dashboard контейнери.
 
-    total_bookings = int(db.query(func.count(Booking.id)).scalar() or 0)
+    New today означава bookings, създадени днес:
+      00:00:00 - 23:59:59
+    по локалното време Europe/Vienna.
+    """
+    today_start = _vienna_now_naive().replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    today_end = today_start + timedelta(days=1)
+
+    total_bookings = int(
+        db.query(func.count(Booking.id)).scalar()
+        or 0
+    )
+
     total_paid = int(
         db.query(func.count(Booking.id))
         .filter(Booking.payment_status == "paid")
         .scalar()
         or 0
     )
+
     total_pending_review = int(
         db.query(func.count(Booking.id))
         .filter(Booking.payment_status == "pending_review")
         .scalar()
         or 0
     )
-
-    today_start = _vienna_now_naive().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
 
     total_today_bookings = int(
         db.query(func.count(Booking.id))
@@ -5302,7 +8065,47 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
         .filter(Booking.created_at < today_end)
         .scalar()
         or 0
-    ) 
+    )
+
+    return {
+        "total_bookings": total_bookings,
+        "total_paid": total_paid,
+        "total_pending_review": total_pending_review,
+        "total_today_bookings": total_today_bookings,
+        "updated_at": _vienna_now_naive().strftime("%d.%m.%Y %H:%M:%S"),
+    }
+
+
+@app.get("/admin/bookings/dashboard-stats")
+def admin_bookings_dashboard_stats_api(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    JSON endpoint за автоматично обновяване на контейнерите
+    без презареждане на страницата.
+    """
+    r = _ensure_admin_or_redirect(request)
+    if r:
+        raise HTTPException(status_code=401, detail="Admin only")
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "stats": _admin_bookings_dashboard_stats(db),
+        },
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        },
+    )
+
+@app.get("/admin/bookings", response_class=HTMLResponse)
+def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db)):
+    r = _ensure_admin_or_redirect(request)
+    if r:
+        return r
+
+    stats = _admin_bookings_dashboard_stats(db)
 
     total_pending_cancellations = int(
         db.query(func.count(BookingCancellation.id))
@@ -5719,12 +8522,7 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
         "admin/bookings_dashboard.html",
         {
             "section": "dashboard",
-            "stats": {
-                "total_bookings": total_bookings,
-                "total_paid": total_paid,
-                "total_pending_review": total_pending_review,
-                "total_today_bookings": total_today_bookings,
-            },
+            "stats": stats,
             "recent_bookings": recent_bookings,
             "critical": {
                 "bank_paypal_missing_proof_le_72": bank_paypal_missing_proof_le_72,
@@ -5739,6 +8537,264 @@ def admin_bookings_dashboard_page(request: Request, db: Session = Depends(get_db
         },
     )
 
+
+def _decorate_admin_booking_category_rows(
+    db: Session,
+    bookings: list[Booking],
+) -> None:
+    """
+    Добавя display-only полета към booking редовете:
+      - final seats
+      - passenger count
+      - linked passengers
+      - payment proof count
+      - linked trip
+    """
+    if not bookings:
+        return
+
+    booking_ids = [
+        int(b.id)
+        for b in bookings
+        if getattr(b, "id", None) is not None
+    ]
+
+    if not booking_ids:
+        return
+
+    final_seats_map: dict[int, list[str]] = {}
+    linked_pax_count_map: dict[int, int] = {}
+    qty_sum_map: dict[int, int] = {}
+    proof_count_map: dict[int, int] = {}
+
+    final_seat_rows = (
+        db.query(
+            BookingSeat.booking_id,
+            BookingSeat.seat_no,
+        )
+        .filter(
+            BookingSeat.booking_id.in_(booking_ids),
+            BookingSeat.is_final == True,
+            BookingSeat.seat_no.isnot(None),
+        )
+        .order_by(
+            BookingSeat.booking_id.asc(),
+            BookingSeat.id.asc(),
+        )
+        .all()
+    )
+
+    for booking_id, seat_no in final_seat_rows:
+        if booking_id is None:
+            continue
+
+        seat_str = str(seat_no or "").strip()
+        if not seat_str:
+            continue
+
+        final_seats_map.setdefault(int(booking_id), []).append(seat_str)
+
+    for booking_id in list(final_seats_map.keys()):
+        unique_seats = list(dict.fromkeys(final_seats_map[booking_id]))
+        unique_seats.sort(key=_seat_sort_key)
+        final_seats_map[booking_id] = unique_seats
+
+    linked_pax_rows = (
+        db.query(
+            TripPassenger.booking_id,
+            func.count(TripPassenger.id),
+        )
+        .filter(
+            TripPassenger.booking_id.in_(booking_ids),
+            TripPassenger.booking_id.isnot(None),
+        )
+        .group_by(TripPassenger.booking_id)
+        .all()
+    )
+
+    linked_pax_count_map = {
+        int(booking_id): int(count or 0)
+        for booking_id, count in linked_pax_rows
+        if booking_id is not None
+    }
+
+    qty_rows = (
+        db.query(
+            BookingTicketLine.booking_id,
+            func.coalesce(func.sum(BookingTicketLine.qty), 0),
+        )
+        .filter(BookingTicketLine.booking_id.in_(booking_ids))
+        .group_by(BookingTicketLine.booking_id)
+        .all()
+    )
+
+    qty_sum_map = {
+        int(booking_id): int(total_qty or 0)
+        for booking_id, total_qty in qty_rows
+        if booking_id is not None
+    }
+
+    proof_rows = (
+        db.query(
+            PaymentProof.booking_id,
+            func.count(PaymentProof.id),
+        )
+        .filter(PaymentProof.booking_id.in_(booking_ids))
+        .group_by(PaymentProof.booking_id)
+        .all()
+    )
+
+    proof_count_map = {
+        int(booking_id): int(count or 0)
+        for booking_id, count in proof_rows
+        if booking_id is not None
+    }
+
+    trip_ids = sorted({
+        int(b.trip_id)
+        for b in bookings
+        if getattr(b, "trip_id", None)
+    })
+
+    trip_by_id: dict[int, Trip] = {}
+
+    if trip_ids:
+        trips = (
+            db.query(Trip)
+            .filter(Trip.id.in_(trip_ids))
+            .all()
+        )
+        trip_by_id = {
+            int(trip.id): trip
+            for trip in trips
+        }
+
+    for booking in bookings:
+        booking_id = int(booking.id)
+
+        final_seats = final_seats_map.get(booking_id, [])
+        linked_pax_count = int(linked_pax_count_map.get(booking_id, 0) or 0)
+        ticket_qty = int(qty_sum_map.get(booking_id, 0) or 0)
+        proof_count = int(proof_count_map.get(booking_id, 0) or 0)
+
+        if ticket_qty > 0:
+            passenger_count = ticket_qty
+        elif linked_pax_count > 0:
+            passenger_count = linked_pax_count
+        elif len(final_seats) > 0:
+            passenger_count = len(final_seats)
+        else:
+            passenger_count = 1
+
+            for attr in ("passenger_count", "pax_count", "seats_count", "qty"):
+                value = getattr(booking, attr, None)
+
+                try:
+                    if value is not None and int(value) > 0:
+                        passenger_count = int(value)
+                        break
+                except Exception:
+                    pass
+
+        booking._category_final_seats = final_seats
+        booking._category_final_seats_str = ", ".join(final_seats) if final_seats else "—"
+        booking._category_linked_pax_count = linked_pax_count
+        booking._category_passenger_count = passenger_count
+        booking._category_payment_proof_count = proof_count
+        booking._category_trip = trip_by_id.get(int(booking.trip_id)) if booking.trip_id else None
+
+
+@app.get("/admin/bookings/category/{category_key}", response_class=HTMLResponse)
+def admin_bookings_category_page(
+    category_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Една обща страница за:
+      /admin/bookings/category/all
+      /admin/bookings/category/paid
+      /admin/bookings/category/pending-review
+      /admin/bookings/category/new-today
+    """
+    r = _ensure_admin_or_redirect(request)
+    if r:
+        return r
+
+    category_key = str(category_key or "").strip().lower()
+
+    categories = {
+        "all": {
+            "title": "Total bookings",
+            "description": "All imported and manually created bookings.",
+        },
+        "paid": {
+            "title": "Paid bookings",
+            "description": "Bookings with approved payment status.",
+        },
+        "pending-review": {
+            "title": "Pending review",
+            "description": "Bookings with uploaded payment proof awaiting admin review.",
+        },
+        "new-today": {
+            "title": "New today",
+            "description": "Bookings created today between 00:00 and 24:00 Europe/Vienna.",
+        },
+    }
+
+    category = categories.get(category_key)
+    if not category:
+        raise HTTPException(status_code=404, detail="Unknown booking category")
+
+    query = db.query(Booking)
+
+    if category_key == "paid":
+        query = query.filter(Booking.payment_status == "paid")
+
+    elif category_key == "pending-review":
+        query = query.filter(Booking.payment_status == "pending_review")
+
+    elif category_key == "new-today":
+        today_start = _vienna_now_naive().replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        today_end = today_start + timedelta(days=1)
+
+        query = (
+            query
+            .filter(Booking.created_at.isnot(None))
+            .filter(Booking.created_at >= today_start)
+            .filter(Booking.created_at < today_end)
+        )
+
+    bookings = (
+        query
+        .order_by(
+            Booking.created_at.desc(),
+            Booking.id.desc(),
+        )
+        .all()
+    )
+
+    _decorate_admin_booking_category_rows(db, bookings)
+
+    return templates.TemplateResponse(
+        request,
+        "admin/bookings_category.html",
+        {
+            "section": "category",
+            "category_key": category_key,
+            "category_title": category["title"],
+            "category_description": category["description"],
+            "bookings": bookings,
+            "category_count": len(bookings),
+            "stats": _admin_bookings_dashboard_stats(db),
+            "generated_at": _vienna_now_naive().strftime("%d.%m.%Y %H:%M:%S"),
+        },
+    )
 
 @app.get("/admin/bookings/{booking_id}", response_class=HTMLResponse)
 def admin_booking_detail_page(
@@ -6317,7 +9373,7 @@ def portal_seats_page(request: Request, db: Session = Depends(get_db)):
     if booking.payment_status != "paid":
         return RedirectResponse(url="/portal?seat_err=payment", status_code=303)
 
-    if not _ensure_booking_has_service(booking):
+    if not _ensure_booking_has_service(db, booking):
         return RedirectResponse(url="/portal?seat_err=service", status_code=303)
 
     if _booking_has_admin_locked_seat(db, booking):
@@ -6369,7 +9425,14 @@ def portal_seats_state(request: Request, db: Session = Depends(get_db)):
     if booking.payment_status != "paid":
         raise HTTPException(status_code=403, detail="Payment is not approved")
 
-    if not _ensure_booking_has_service(booking):
+    # КРИТИЧНО: първо resolve-ваме trip_id
+    trip_id = _resolve_booking_trip_id(db, booking)
+    if trip_id:
+        booking.trip_id = trip_id
+        db.commit()
+        db.refresh(booking)
+
+    if not _ensure_booking_has_service(db, booking):
         raise HTTPException(status_code=403, detail="Booking has no service/trip")
 
     taken_seats_raw = _service_taken_seats(db, booking, exclude_booking_id=booking.id)
@@ -6378,13 +9441,68 @@ def portal_seats_state(request: Request, db: Session = Depends(get_db)):
         key=_seat_sort_key,
     )
 
+    selected_seats = _booking_selected_seats(booking)
+
+    # debug: показва кои trips реално вижда на тази дата
+    trip_candidates_same_date = []
+    booking_date = getattr(booking, "booking_date", None)
+
+    try:
+        if isinstance(booking_date, datetime):
+            booking_date_only = booking_date.date()
+        else:
+            booking_date_only = booking_date
+
+        if booking_date_only:
+            day_start = datetime.combine(booking_date_only, time.min)
+            day_end = day_start + timedelta(days=1)
+
+            candidates = (
+                db.query(Trip)
+                .filter(Trip.date_time.isnot(None))
+                .filter(Trip.date_time >= day_start)
+                .filter(Trip.date_time < day_end)
+                .order_by(Trip.date_time.asc(), Trip.id.asc())
+                .all()
+            )
+
+            for t in candidates:
+                trip_candidates_same_date.append({
+                    "id": t.id,
+                    "date_time": str(t.date_time),
+                    "route_from": t.route_from,
+                    "route_to": t.route_to,
+                    "norm_from": _norm_stop_key(t.route_from),
+                    "norm_to": _norm_stop_key(t.route_to),
+                })
+    except Exception:
+        trip_candidates_same_date = []
+
+    db.commit()
+
     return {
         "ok": True,
         "taken_seats": taken_seats,
-        "selected_seats": _booking_selected_seats(booking),
+        "selected_seats": selected_seats,
         "passenger_count": _booking_passenger_count(db, booking),
+        "debug": {
+            "booking_id": booking.id,
+            "external_id": str(booking.external_id or ""),
+            "trip_id": booking.trip_id,
+            "booking_date": str(booking.booking_date),
+            "route_from": booking.route_from,
+            "route_to": booking.route_to,
+            "bus_from": booking.bus_from,
+            "bus_to": booking.bus_to,
+            "norm_route_from": _norm_stop_key(booking.route_from),
+            "norm_route_to": _norm_stop_key(booking.route_to),
+            "norm_bus_from": _norm_stop_key(booking.bus_from),
+            "norm_bus_to": _norm_stop_key(booking.bus_to),
+            "taken_count": len(taken_seats),
+            "selected_count": len(selected_seats),
+            "trip_candidates_same_date": trip_candidates_same_date,
+        },
     }
-
 
 @app.post("/portal/seats/assign")
 async def portal_assign_seats(request: Request, db: Session = Depends(get_db)):
@@ -6401,7 +9519,7 @@ async def portal_assign_seats(request: Request, db: Session = Depends(get_db)):
     if booking.payment_status != "paid":
         return RedirectResponse(url="/portal?seat_err=payment", status_code=303)
 
-    if not _ensure_booking_has_service(booking):
+    if not _ensure_booking_has_service(db, booking):
         return RedirectResponse(url="/portal?seat_err=service", status_code=303)
 
     if _booking_has_admin_locked_seat(db, booking):
@@ -6418,10 +9536,12 @@ async def portal_assign_seats(request: Request, db: Session = Depends(get_db)):
 
     seat_nos: list[str] = []
     seen: set[str] = set()
+
     for raw in raw_seat_nos:
         seat_no = str(raw or "").strip()
         if not seat_no or seat_no in seen:
             continue
+
         seen.add(seat_no)
         seat_nos.append(seat_no)
 
@@ -6432,7 +9552,12 @@ async def portal_assign_seats(request: Request, db: Session = Depends(get_db)):
     if any(seat_no not in allowed for seat_no in seat_nos):
         return RedirectResponse(url="/portal/seats?seat_err=invalid", status_code=303)
 
-    taken_seats = _service_taken_seats(db, booking, exclude_booking_id=booking.id)
+    taken_seats = _service_taken_seats(
+        db=db,
+        booking=booking,
+        exclude_booking_id=booking.id,
+    )
+
     if any(seat_no in taken_seats for seat_no in seat_nos):
         return RedirectResponse(url="/portal/seats?seat_err=taken", status_code=303)
 
@@ -6446,6 +9571,8 @@ async def portal_assign_seats(request: Request, db: Session = Depends(get_db)):
     db.commit()
 
     return RedirectResponse(url="/portal/seats?seat_ok=assigned", status_code=303)
+
+
 
 
 @app.post("/portal/seats/select")
@@ -6467,7 +9594,7 @@ def portal_select_seat(
     if booking.payment_status != "paid":
         return RedirectResponse(url="/portal?seat_err=payment", status_code=303)
 
-    if not _ensure_booking_has_service(booking):
+    if not _ensure_booking_has_service(db, booking):
         return RedirectResponse(url="/portal?seat_err=service", status_code=303)
 
     # ADMIN LOCK GUARD:
@@ -6558,7 +9685,7 @@ def portal_auto_assign_seat(
     if booking.payment_status != "paid":
         return RedirectResponse(url="/portal?seat_err=payment", status_code=303)
 
-    if not _ensure_booking_has_service(booking):
+    if not _ensure_booking_has_service(db, booking):
         return RedirectResponse(url="/portal?seat_err=service", status_code=303)
 
     if _booking_has_admin_locked_seat(db, booking):
@@ -7014,108 +10141,213 @@ def home(request: Request):
 
 
 
-def _driver_active_days() -> list[dict]:
+# =======================
+# Driver active trip window
+# =======================
+
+def _driver_active_window_dates() -> tuple[date, date, date]:
+    """
+    Driver portal показва само:
+      - вчера
+      - днес
+      - утре
+
+    Използва Europe/Vienna чрез _today_vienna().
+    """
     today = _today_vienna()
-    labels = {-1: "Вчера", 0: "Днес", 1: "Утре"}
-    return [
-        {
-            "date": (today + timedelta(days=offset)).isoformat(),
-            "relative_label": labels[offset],
-            "date_label": (today + timedelta(days=offset)).strftime("%d.%m.%Y"),
-        }
-        for offset in (-1, 0, 1)
-    ]
+
+    return (
+        today - timedelta(days=1),
+        today,
+        today + timedelta(days=1),
+    )
 
 
-def _driver_trip_is_in_active_window(trip: Trip | None) -> bool:
-    if not trip or not getattr(trip, "date_time", None):
+def _trip_is_in_driver_active_window(trip: Trip | None) -> bool:
+    """
+    Проверява дали даден рейс попада в активния driver прозорец:
+    вчера / днес / утре.
+    """
+    if not trip:
         return False
 
-    trip_date = trip.date_time.date()
-    today = _today_vienna()
-    return today - timedelta(days=1) <= trip_date <= today + timedelta(days=1)
+    trip_datetime = getattr(trip, "date_time", None)
+
+    if not trip_datetime:
+        return False
+
+    previous_day, _today, next_day = _driver_active_window_dates()
+    trip_date = trip_datetime.date()
+
+    return previous_day <= trip_date <= next_day
 
 
-def _ensure_driver_trip_access(request: Request, trip: Trip | None) -> None:
-    if request.session.get("is_admin"):
-        return
-    if not request.session.get("is_driver"):
-        raise HTTPException(401, "Not authorized")
-    if not _driver_trip_is_in_active_window(trip):
-        raise HTTPException(403, "Trip is outside the active driver window")
+def _ensure_trip_visible_for_driver(trip: Trip | None) -> None:
+    """
+    Driver няма достъп до стари или твърде бъдещи рейсове
+    чрез директно въвеждане на URL.
+    """
+    if not _trip_is_in_driver_active_window(trip):
+        raise HTTPException(
+            status_code=403,
+            detail="Trip is outside the active driver window",
+        )
+
+
+def _driver_trip_direction_meta(trip: Trip) -> dict:
+    """
+    Групира рейсовете за driver portal като:
+      UA_AT = Украйна → Австрия
+      AT_UA = Австрия → Украйна
+      OTHER = нетипичен маршрут
+
+    Използва съществуващия STOP_ADDRESS_BOOK и aliases.
+    """
+    route_from = getattr(trip, "route_from", None)
+    route_to = getattr(trip, "route_to", None)
+
+    country_from = _dashboard_stop_country_group(route_from)
+    country_to = _dashboard_stop_country_group(route_to)
+
+    if country_from == "UA" and country_to == "AT":
+        return {
+            "key": "UA_AT",
+            "label": "Украйна → Австрия",
+        }
+
+    if country_from == "AT" and country_to == "UA":
+        return {
+            "key": "AT_UA",
+            "label": "Австрия → Украйна",
+        }
+
+    # Legacy fallback за Innsbruck ↔ Kyiv.
+    legacy_direction = _direction_code_from_values(route_from, route_to)
+
+    if legacy_direction == "KI":
+        return {
+            "key": "UA_AT",
+            "label": "Украйна → Австрия",
+        }
+
+    if legacy_direction == "IK":
+        return {
+            "key": "AT_UA",
+            "label": "Австрия → Украйна",
+        }
+
+    return {
+        "key": "OTHER",
+        "label": f"{route_from or '—'} → {route_to or '—'}",
+    }
 
 
 @app.get("/drivers", response_class=HTMLResponse)
 def drivers_page(request: Request, db: Session = Depends(get_db)):
     _ensure_driver(request)
 
-    today = _today_vienna()
-    day_start = datetime.combine(today - timedelta(days=1), time.min)
-    day_end = datetime.combine(today + timedelta(days=2), time.min)
+    previous_day, today, next_day = _driver_active_window_dates()
 
+    window_start = datetime.combine(previous_day, time.min)
+    window_end = datetime.combine(
+        next_day + timedelta(days=1),
+        time.min,
+    )
+
+    # ВАЖНО:
+    # Няма филтър Trip.is_finalized.
+    # Данните са live и не се изисква Freigabe от admin.
     trips = (
         db.query(Trip)
         .filter(Trip.date_time.isnot(None))
-        .filter(Trip.date_time >= day_start)
-        .filter(Trip.date_time < day_end)
+        .filter(Trip.date_time >= window_start)
+        .filter(Trip.date_time < window_end)
         .order_by(Trip.date_time.asc(), Trip.id.asc())
         .all()
     )
 
+    active_days = [
+        {
+            "date": previous_day.isoformat(),
+            "relative_label": "Вчера",
+            "date_label": previous_day.strftime("%d.%m.%Y"),
+            "is_today": False,
+        },
+        {
+            "date": today.isoformat(),
+            "relative_label": "Днес",
+            "date_label": today.strftime("%d.%m.%Y"),
+            "is_today": True,
+        },
+        {
+            "date": next_day.isoformat(),
+            "relative_label": "Утре",
+            "date_label": next_day.strftime("%d.%m.%Y"),
+            "is_today": False,
+        },
+    ]
+
     trips_data: list[dict] = []
+
     for trip in trips:
         live_payload = _build_driver_trip_live_payload(db, trip.id)
-        manifest = _load_driver_manifest(db, trip.id)
+        direction_meta = _driver_trip_direction_meta(trip)
 
-        route_from = (trip.route_from or "").strip()
-        route_to = (trip.route_to or "").strip()
-        legacy_dir = _direction_code_from_values(route_from, route_to) or "OTHER"
-        direction = "UA_AT" if legacy_dir == "KI" else ("AT_UA" if legacy_dir == "IK" else "OTHER")
-        route_label = f"{route_from or '?'} → {route_to or '?'}"
+        total_passengers = int(
+            live_payload.get("displayTotal")
+            or 0
+        )
+
+        kept_passengers = int(
+            live_payload.get("keptPassengerCount")
+            or 0
+        )
+
+        missing_passengers = int(
+            live_payload.get("missingPassengerCount")
+            or 0
+        )
 
         trips_data.append({
             "id": int(trip.id),
             "date": trip.date_time.strftime("%Y-%m-%d"),
             "dateLabel": trip.date_time.strftime("%d.%m.%Y"),
             "time": trip.date_time.strftime("%H:%M"),
-            "from": route_from,
-            "to": route_to,
-            "dir": direction,
-            "legacyDir": legacy_dir,
-            "label": route_label,
-            "routeLabel": route_label,
-            "total": int(live_payload.get("displayTotal") or 0),
-            "kept": int(live_payload.get("keptPassengerCount") or 0),
-            "missing": int(live_payload.get("missingPassengerCount") or 0),
-            "published": bool(manifest and manifest.get("publishedAt")),
-            "publishedAt": manifest.get("publishedAt") if manifest else None,
+            "from": (trip.route_from or "").strip(),
+            "to": (trip.route_to or "").strip(),
+            "routeLabel": f"{trip.route_from or '—'} → {trip.route_to or '—'}",
+            "dir": direction_meta["key"],
+            "directionLabel": direction_meta["label"],
+            "total": total_passengers,
+            "kept": kept_passengers,
+            "missing": missing_passengers,
         })
 
     return templates.TemplateResponse(
         request,
         "drivers_trips.html",
         {
-            "trips": trips,
-            "trips_data": trips_data,
-            "active_days": _driver_active_days(),
+            "active_days": active_days,
             "today": today.isoformat(),
+            "trips_data": trips_data,
         },
     )
 
 
 
 @app.get("/drivers/trips/{trip_id}", response_class=HTMLResponse)
-def driver_trip_detail(request: Request, trip_id: int, db: Session = Depends(get_db)):
+def driver_trip_detail(
+    request: Request,
+    trip_id: int,
+    db: Session = Depends(get_db),
+):
     _ensure_driver(request)
 
     trip = crud.get_trip(db, trip_id)
     if not trip:
         raise HTTPException(404, "Trip not found")
 
-    _ensure_driver_trip_access(request, trip)
-
     live_payload = _build_driver_trip_live_payload(db, trip_id)
-    manifest = _load_driver_manifest(db, trip_id)
 
     return templates.TemplateResponse(
         request,
@@ -7125,15 +10357,20 @@ def driver_trip_detail(request: Request, trip_id: int, db: Session = Depends(get
             "driver_projection": live_payload,
             "driver_booking_pending": live_payload.get("bookingPending", []),
             "driver_booking_coverage": live_payload.get("bookingCoverage", []),
-            "driver_raw_passenger_count": int(live_payload.get("rawPassengerCount") or 0),
-            "driver_kept_passenger_count": int(live_payload.get("keptPassengerCount") or 0),
-            "driver_missing_passenger_count": int(live_payload.get("missingPassengerCount") or 0),
-            "driver_display_total": int(live_payload.get("displayTotal") or 0),
-            "driver_manifest_published": bool(manifest and manifest.get("publishedAt")),
-            "driver_manifest_published_at": manifest.get("publishedAt") if manifest else None,
+            "driver_raw_passenger_count": int(
+                live_payload.get("rawPassengerCount") or 0
+            ),
+            "driver_kept_passenger_count": int(
+                live_payload.get("keptPassengerCount") or 0
+            ),
+            "driver_missing_passenger_count": int(
+                live_payload.get("missingPassengerCount") or 0
+            ),
+            "driver_display_total": int(
+                live_payload.get("displayTotal") or 0
+            ),
         },
     )
-
 
 @app.get("/trips", response_class=HTMLResponse)
 def trips_page(request: Request):
@@ -7206,7 +10443,7 @@ def api_trip_summary(trip_id: int, request: Request, db: Session = Depends(get_d
         raise HTTPException(404, "Trip not found")
 
     if is_driver and not is_admin:
-        _ensure_driver_trip_access(request, trip)
+        _ensure_trip_visible_for_driver(trip)
 
     effective_from = _effective_sql_text(TripPassenger.manual_from_city, TripPassenger.from_city)
     effective_to = _effective_sql_text(TripPassenger.manual_to_city, TripPassenger.to_city)
@@ -7276,7 +10513,7 @@ def api_list_passengers(trip_id: int, request: Request, db: Session = Depends(ge
         raise HTTPException(404, "Trip not found")
 
     if is_driver and not is_admin:
-        _ensure_driver_trip_access(request, trip)
+        _ensure_trip_visible_for_driver(trip)
 
     passengers = crud.list_passengers(db, trip_id)
     passengers = sorted(
@@ -7364,7 +10601,11 @@ def api_driver_manifest_debug(trip_id: int, request: Request, db: Session = Depe
     }
 
 @app.get("/api/trips/{trip_id}/driver-passengers")
-def api_driver_list_passengers(trip_id: int, request: Request, db: Session = Depends(get_db)):
+def api_driver_list_passengers(
+    trip_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     is_admin = bool(request.session.get("is_admin"))
     is_driver = bool(request.session.get("is_driver"))
 
@@ -7375,11 +10616,11 @@ def api_driver_list_passengers(trip_id: int, request: Request, db: Session = Dep
     if not trip:
         raise HTTPException(404, "Trip not found")
 
-    if is_driver and not is_admin:
-        _ensure_driver_trip_access(request, trip)
-
     payload = _build_driver_trip_live_payload(db, trip_id)
-    return JSONResponse(payload.get("passengers", []))
+
+    return JSONResponse(
+        payload.get("passengers", [])
+    )
 
 
 # =======================
@@ -7497,7 +10738,7 @@ async def api_patch_passenger(passenger_id: int, request: Request, payload: dict
         raise HTTPException(404, "Trip not found")
 
     if is_driver and not is_admin:
-        _ensure_driver_trip_access(request, trip)
+        _ensure_trip_visible_for_driver(trip)
 
     if is_driver and not is_admin:
         allowed = {"checkedIn", "paid", "amount", "currency"}

@@ -156,47 +156,25 @@
     <div class="priceCard">
       <div class="sectionTitle">{{ t(request, "portal.ticket.ticket_price") }}</div>
 
-      {% if ticket_lines is defined and ticket_lines %}
-        <div class="priceList">
-          {% for line in ticket_lines %}
-            <div class="priceRow">
-              <div class="priceType">
-                {{ line.ticket_type_raw or t(request, "portal.ticket.ticket_fallback") }}
-                {% if line.qty %}
-                  <span class="priceQty">× {{ line.qty }}</span>
-                {% endif %}
-              </div>
+      <div class="priceList">
+        <div class="priceRow">
+          <div class="priceType">
+            {{ ticket.ticket_type or t(request, "portal.ticket.ticket_fallback") }}
+          </div>
 
-              <div class="priceValue">
-                {% if line.is_dual_currency %}
-                  {% if line.line_total_uah is not none %}{{ "{:,.2f}".format(line.line_total_uah) }} UAH{% endif %}
-                  {% if line.line_total_uah is not none and line.line_total_eur is not none %} / {% endif %}
-                  {% if line.line_total_eur is not none %}{{ "%.2f"|format(line.line_total_eur) }} EUR{% endif %}
-                {% else %}
-                  {% if line.line_total is not none %}
-                    {{ "%.2f"|format(line.line_total) }} {{ line.currency }}
-                  {% else %}
-                    —
-                  {% endif %}
-                {% endif %}
-              </div>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="priceList">
-          <div class="priceRow">
-            <div class="priceType">{{ t(request, "portal.ticket.ticket_fallback") }}</div>
-            <div class="priceValue">
-              {% if booking.total is not none %}
-                {{ "%.2f"|format(booking.total) }} {{ booking.currency or "" }}
-              {% else %}
-                —
-              {% endif %}
-            </div>
+          <div class="priceValue">
+            {% if ticket.ticket_price_text %}
+              {{ ticket.ticket_price_text }}
+            {% else %}
+              —
+            {% endif %}
+
+            {% if ticket.booking_total_text %}
+              <span class="priceTotal"> / Total {{ ticket.booking_total_text }}</span>
+            {% endif %}
           </div>
         </div>
-      {% endif %}
+      </div>
     </div>
 
     <div class="metaGrid">
@@ -508,6 +486,11 @@
   color:#0f172a;
   text-align:right;
   white-space:nowrap;
+}
+
+.priceTotal{
+  color:#475569;
+  font-weight:700;
 }
 
 .metaGrid{
